@@ -51,13 +51,20 @@ def _env_int(name: str, default: int) -> int:
 class FusionWeights:
     """Weights for merging the retrieval channels into one candidate score.
 
-    These are configuration, not universal truths. They start at the values from
-    the technical plan and are only changed when the evaluation harness shows a
-    consistent improvement across the development question set.
+    These are configuration, not universal truths, and they have been *measured*
+    rather than asserted. The technical plan proposed 0.35/0.45 (vector-leaning);
+    a sweep over `scripts/sweep_weights.py` against the paraphrase probe showed
+    that under-weighting lexical retrieval costs precision on this corpus, whose
+    vocabulary is invented — BM25 is the only channel that can pin
+    "Vharencrag Fortress" exactly.
+
+    At 0.50/0.30 the hybrid matches keyword-only on recall@1 (5/10) while beating
+    it on recall@5 (8/10 vs 7/10). The plan's 0.35/0.45 lost a recall@1 hit for no
+    recall@5 gain. See docs/decisions.md D15.
     """
 
-    bm25: float = 0.35
-    vector: float = 0.45
+    bm25: float = 0.50
+    vector: float = 0.30
     entity_overlap: float = 0.10
     source_quality: float = 0.10
 
@@ -113,8 +120,8 @@ def load_settings() -> Settings:
         assets_dir=_env_path("AEA_ASSETS_DIR", data_dir / "assets"),
         cache_dir=_env_path("AEA_CACHE_DIR", data_dir / "cache"),
         fusion=FusionWeights(
-            bm25=_env_float("AEA_W_BM25", 0.35),
-            vector=_env_float("AEA_W_VECTOR", 0.45),
+            bm25=_env_float("AEA_W_BM25", 0.50),
+            vector=_env_float("AEA_W_VECTOR", 0.30),
             entity_overlap=_env_float("AEA_W_ENTITY", 0.10),
             source_quality=_env_float("AEA_W_SOURCE", 0.10),
         ),
