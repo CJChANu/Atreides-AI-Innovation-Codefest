@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.config import SETTINGS  # noqa: E402
 from src.graph.builder import GraphBuilder  # noqa: E402
 from src.graph.facts import FactExtractor  # noqa: E402
+from src.indexes.vector import VectorIndex  # noqa: E402
 from src.storage.db import ArchiveStore  # noqa: E402
 
 
@@ -27,6 +28,11 @@ def main() -> int:
         print(GraphBuilder(store).build().summary())
         print("\n— attribute facts —")
         print(FactExtractor(store).build().summary())
+
+        print("\n— vector index —")
+        stats = VectorIndex(SETTINGS.data_dir / "vectors.npz").build(store, SETTINGS)
+        for key, value in stats.items():
+            print(f"{key:<18} {value}")
     print(f"\nelapsed   {time.perf_counter() - started:.1f}s")
     return 0
 
