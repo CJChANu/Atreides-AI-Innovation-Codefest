@@ -60,6 +60,23 @@ def decompose(question: Question) -> list[SubQuestion]:
         ))
         return subs
 
+    if question.intent is Intent.TEMPORAL_CHECK:
+        subject = question.entities[0][1] if question.entities else "the subject"
+        place = question.entities[1][1] if len(question.entities) > 1 else "the place"
+        return [
+            SubQuestion("origin", f"When did {subject} come into existence?",
+                        f"a recorded origin year for {subject}, with a citation"),
+            SubQuestion("events", f"What dated events does the archive record at {place}?",
+                        f"every dated event naming {place}, read from the event's own record"),
+            SubQuestion("relation", f"What does the archive record linking {subject} to {place}?",
+                        f"the recorded relationship between {subject} and {place}"),
+            SubQuestion("temporal", f"Do the dates allow {subject} to have been at {place}?",
+                        "the origin year compared against every event year, with the "
+                        "conclusion that follows"),
+            SubQuestion("conflict", "Do sources disagree about any of those dates?",
+                        "competing values checked for each date used"),
+        ]
+
     if question.intent is Intent.MULTI_FACT and question.operands:
         # One atomic sub-question per requested fact, then a step that assembles
         # them. Splitting before retrieval is what stops a four-part question
@@ -131,6 +148,28 @@ def next_action(question: Question, pending: list[SubQuestion], learned: dict) -
     step = pending[0]
     primary = question.primary
     name = primary[1] if primary else question.text
+
+    if step.key == "origin":
+        return ("origin_lookup", name,
+                f"whether {name} could have been present anywhere depends first on "
+                f"when it came into existence")
+
+    if step.key == "events":
+        place = question.entities[1][1] if len(question.entities) > 1 else name
+        return ("event_scan", place,
+                f"the archive records events on the *event's* page, not the place's, "
+                f"so {place}'s history is found by searching from the event end")
+
+    if step.key == "relation":
+        place = question.entities[1][1] if len(question.entities) > 1 else name
+        return ("relation_check", f"{name} {place}",
+                f"what the archive actually records linking {name} to {place} — "
+                f"present custody is not evidence of past presence")
+
+    if step.key == "temporal":
+        return ("temporal_compare", question.text,
+                "compare the origin year against each event year and state what "
+                "the ordering rules out")
 
     if step.key.startswith("operand:"):
         index = int(step.key.split(":", 1)[1])

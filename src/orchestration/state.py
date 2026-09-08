@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+from uuid import uuid4
 
 from src.graph.fact_query import FactRow
 
@@ -23,6 +24,7 @@ class Intent(str, Enum):
     INVERSE_HOP = "inverse_hop"                  # "which faction has X as a member"
     CALCULATION = "calculation"                  # "what percentage of X's a is Y's b"
     MULTI_FACT = "multi_fact"                    # "where and when was X forged, and where is it housed"
+    TEMPORAL_CHECK = "temporal_check"            # "why would it be wrong to say X was at Y when Y fell"
     OPEN_QUESTION = "open_question"              # anything else; falls back to text search
 
 
@@ -127,7 +129,10 @@ class Claim:
             "confidence": round(self.confidence, 3),
             "evidence": [
                 {"document_id": e.document_id, "document": title_of(e.document_id),
-                 "page": e.page, "chunk_id": e.chunk_id, "source_class": e.source_class}
+                 "page": e.page, "chunk_id": e.chunk_id, "source_class": e.source_class,
+                 # The passage the value was read from, so a reader can check the
+                 # extraction instead of taking the citation on trust.
+                 "excerpt": e.excerpt}
                 for e in self.evidence
             ],
         }
@@ -245,9 +250,18 @@ class Question:
 
 @dataclass
 class Investigation:
-    """The complete record of one question being answered."""
+    """The complete record of one question being answered.
+
+    Every field is populated during this investigation and never carried between
+    them: the object is constructed per question, and the loop keeps its working
+    state in locals rather than on the investigator. The id makes that checkable
+    from the outside — every claim, iteration and evidence row in a response
+    belongs to exactly one of these, and a stale value from an earlier question
+    has no route in.
+    """
 
     question: Question
+    investigation_id: str = field(default_factory=lambda: uuid4().hex[:16])
     sub_questions: list[SubQuestion] = field(default_factory=list)
     iterations: list[Iteration] = field(default_factory=list)
     claims: list[Claim] = field(default_factory=list)
@@ -281,6 +295,7 @@ class Investigation:
 
     def to_dict(self, title_of) -> dict[str, Any]:
         return {
+            "investigation_id": self.investigation_id,
             "question": self.question.text,
             "answer": self.answer_value,
             "intent": self.question.intent.value,

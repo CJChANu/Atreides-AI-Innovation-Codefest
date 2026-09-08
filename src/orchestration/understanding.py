@@ -146,6 +146,29 @@ CALCULATION_MARKERS: list[tuple[re.Pattern[str], str]] = [
 # The word that introduces the denominator in a percentage or ratio question.
 _DENOMINATOR_CUE = re.compile(r"\bpercent(?:age)?\s+of\b|\bratio\s+of\b|\bof\b", re.IGNORECASE)
 
+# Questions that ask for a *judgement about a claim* rather than for a value:
+# whether something follows, and why it does not. These cannot be answered by any
+# lookup, because the answer is the relationship between two recorded facts.
+EXPLANATION_MARKERS = re.compile(
+    r"\bwhy\s+would\s+it\s+be\s+(?:incorrect|wrong|mistaken|a\s+mistake|unsafe)\b|"
+    r"\bwhy\s+is\s+it\s+(?:incorrect|wrong|mistaken|unsafe)\b|"
+    r"\bwhy\s+can(?:no|')?t\b|"
+    r"\bwould\s+it\s+be\s+(?:incorrect|correct|wrong|right|mistaken|safe)\s+to\b|"
+    r"\bis\s+it\s+(?:correct|safe|right|accurate)\s+to\s+(?:conclude|say|assume|infer|claim)\b|"
+    r"\bexplain\s+why\b|"
+    r"\bwhat\s+is\s+wrong\s+with\s+(?:the\s+)?(?:claim|conclusion|assumption)\b",
+    re.IGNORECASE,
+)
+
+# A claim about being somewhere at a particular time. Paired with the markers
+# above, this is what makes the question answerable by comparing dates.
+PRESENCE_MARKERS = re.compile(
+    r"\bpresent\b|\bwas\s+(?:at|in|there)\b|\bat\s+the\s+time\b|\bduring\b|"
+    r"\bwhen\s+it\s+was\b|\bwhen\s+(?:it|they)\s+(?:fell|burned|was\s+destroyed)\b|"
+    r"\bwitnessed\b|\bsurvived\b",
+    re.IGNORECASE,
+)
+
 
 class QuestionAnalyzer:
     def __init__(self, store: ArchiveStore) -> None:
@@ -521,6 +544,18 @@ class QuestionAnalyzer:
                 expects_conflict=expects_conflict,
                 filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
                 operands=operands, calculation=calculation,
+            )
+
+        # A question about whether a claim *follows* is not a lookup at all: no
+        # stored value answers "why would it be wrong to conclude X". It needs
+        # two facts and the relationship between them, so it gets its own plan.
+        if (EXPLANATION_MARKERS.search(text) and PRESENCE_MARKERS.search(text)
+                and len(entities) >= 2):
+            return Question(
+                text=text, intent=Intent.TEMPORAL_CHECK, entities=entities,
+                attribute=attribute, answer_type="explanation",
+                expects_conflict=expects_conflict,
+                filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
             )
 
         # A question asking for several distinct facts is several questions. This

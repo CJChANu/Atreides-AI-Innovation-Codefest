@@ -93,6 +93,50 @@ the trace as fallback events.
 
 ## Known limitations in what *is* built
 
+### The fact store is an index, not the evidence
+Every row in `facts` was extracted from a chunk and keeps that chunk's id, so a
+stored value is a pointer into the corpus rather than a replacement for it. Until
+recently nothing followed the pointer back: an answer cited "page 16 of the
+codex" and the reader had to take that on trust.
+
+`verification/excerpts.py` now reads the original line back for every fact an
+answer rests on, and the answer quotes it — the infobox row, the codex row, or
+the sentence. That is what makes the citation checkable, and it is where a
+mis-parsed table or a mis-read plate becomes visible instead of staying hidden
+behind a plausible number.
+
+The graph and the fact store are used to *find* things: which entities a question
+names, which events name a place, which attribute a subject records. The answer
+is then built from the passages those pointers lead to.
+
+### Reasoning over dates, and its limits
+Some questions have no stored answer at all. "Why would it be incorrect to
+conclude that the Cinder-Wrought Aegis was present in Gloamreach when it was
+devastated?" is answered by two recorded facts and the relationship between them,
+and no lookup produces it.
+
+`reasoning/temporal.py` and `graph/timeline.py` handle this shape: find when the
+subject came into existence, find every dated event naming the place — read from
+the *event's* record, because Gloamreach's own page never mentions being
+devastated — compare the years, and report what the ordering rules out. The
+conclusion is typed `inferred`, never `direct`: no source states it.
+
+Two details of that example are worth keeping, because both are places a simpler
+implementation gets a plausible wrong answer:
+
+- Gloamreach was devastated **twice**, in 227 AS and again in 320 AS by a
+  different war. An answer naming one is half an answer, so every dated event is
+  compared, not the first.
+- The relic's *housing* in Gloamreach is recorded, and reading that as evidence
+  of presence during an earlier event is the precise mistake the question is
+  about. Custody is reported as custody.
+
+**What this does not do:** it compares an origin year against event years. It is
+not a general temporal reasoner — it will not order two events against each
+other, reason about durations or overlaps, or handle a question whose dates are
+implied rather than recorded. Questions outside the "could X have been at Y when
+Z happened" shape fall back to retrieval.
+
 ### Multi-part questions are split, but only on facts
 A question asking for several things is decomposed into one sub-question per
 requested `(subject, attribute)` pair, and the answer is withheld until every one

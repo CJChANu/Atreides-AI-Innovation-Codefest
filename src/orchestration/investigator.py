@@ -25,11 +25,20 @@ import time
 from src.common.config import InvestigationBudget
 from src.common.provenance import reliability_of
 from src.graph.fact_query import AttributeView, FactQuery, FactRow
+from src.graph.fact_query import _to_fact as _fact_row
 from src.graph.facts import numeric_value
 from src.graph.plate_facts import is_figure_attribute
 from src.graph.prose_facts import extract as prose_extract
 from src.graph.prose_facts import search_queries as prose_queries
 from src.graph.query import GraphQuery
+from src.graph.timeline import Timeline
+from src.reasoning.temporal import (
+    CUSTODY_ATTRIBUTES,
+    ORIGIN_ATTRIBUTES,
+    TemporalVerdict,
+    check_anachronism,
+    parse_year,
+)
 from src.orchestration.planner import decompose, next_action
 from src.orchestration.state import (
     Intent,
@@ -115,6 +124,7 @@ class Investigator:
         self.graph = GraphQuery(store)
         self.keyword = KeywordIndex(store)
         self.figures = FigureIndex(store)
+        self.timeline = Timeline(store)
         # Both optional. Absent, the loop is exactly the deterministic system it
         # was before — which is the fallback mode, not a degraded special case.
         self.gateway = gateway
@@ -291,6 +301,10 @@ class Investigator:
             "fact_scan": self._act_fact_scan,
             "fact_lookup": self._act_fact_lookup,
             "operand_lookup": self._act_operand_lookup,
+            "origin_lookup": self._act_origin_lookup,
+            "event_scan": self._act_event_scan,
+            "relation_check": self._act_relation_check,
+            "temporal_compare": self._act_temporal_compare,
             "assemble": self._act_assemble,
             "compute": self._act_compute,
             "report_gap": self._act_report_gap,
@@ -357,6 +371,171 @@ class Investigator:
         state.evidence_chain.append(f"{operand.subject_name} — "
                                     f"{operand.attribute.replace('_', ' ')}: {display}")
         step.satisfy(rows, f"{operand.attribute} = {display}")
+        return True
+
+    # -- temporal reasoning -------------------------------------------------
+
+    def _act_origin_lookup(self, question, step, state, iteration, learned) -> bool:
+        """Establish when the subject came into existence.
+
+        Which attribute carries that depends on what the subject *is* — a relic
+        is forged, a hold is founded, a person is born — so rather than guess
+        from an entity type we do not reliably have, try each in turn and record
+        which one answered. The prose fallback applies here too: the Aegis' only
+        recorded forging year is a sentence in a contract about another relic.
+        """
+        primary = question.primary
+        if primary is None:
+            step.fail("no subject named")
+            return False
+        subject_id, name = primary
+        iteration.retrieval_modes = ["facts"]
+
+        origin = self.timeline.origin_of(subject_id)
+        if origin is not None:
+            learned["origin_year"] = origin.year
+            learned["origin_attribute"] = origin.attribute
+            learned["origin_rows"] = [origin.row]
+            iteration.new_claims = [
+                f"{name} · {origin.attribute.replace('_', ' ')} = {origin.year} AS"]
+            state.evidence_chain.append(
+                f"{name} — {origin.attribute.replace('_', ' ')}: {origin.year} AS")
+            step.satisfy([origin.row], f"origin year {origin.year} AS")
+            return True
+
+        # No table records it. Try each origin attribute through the prose reader.
+        for attribute in ORIGIN_ATTRIBUTES:
+            operand = Operand(subject_id=subject_id, subject_name=name, attribute=attribute)
+            if self._try_prose(operand, step, state, iteration):
+                year = parse_year(operand.value_text)
+                if year is None:
+                    continue
+                learned["origin_year"] = year
+                learned["origin_attribute"] = attribute
+                learned["origin_rows"] = operand.evidence
+                return True
+
+        step.fail(f"no recorded origin year for {name}")
+        iteration.new_claims.append(f"no origin year recorded for {name}")
+        return False
+
+    def _act_event_scan(self, question, step, state, iteration, learned) -> bool:
+        """Find the dated events naming the place, from the events' own records."""
+        if len(question.entities) < 2:
+            step.fail("no place named")
+            return False
+        place = question.entities[1][1]
+        iteration.retrieval_modes = ["facts", "graph"]
+
+        events = self.timeline.events_at(place)
+        if not events:
+            step.fail(f"no dated events recorded at {place}")
+            return False
+
+        learned["events"] = events
+        iteration.new_claims = [event.describe() for event in events]
+        for event in events:
+            state.evidence_chain.append(
+                f"{event.subject_name} — {event.attribute.replace('_', ' ')}: "
+                f"{event.place} in {event.year} AS")
+        step.satisfy([event.row for event in events],
+                     f"{len(events)} dated event(s) at {place}")
+        return True
+
+    def _act_relation_check(self, question, step, state, iteration, learned) -> bool:
+        """What the archive actually records linking the subject to the place.
+
+        This is the half of the answer that is not arithmetic. "Housed in
+        Gloamreach" is a statement about where the relic is *now*; reading it as
+        evidence of where it was during an earlier event is the specific mistake
+        the question is asking about, so the recorded relation has to be named.
+        """
+        primary = question.primary
+        if primary is None or len(question.entities) < 2:
+            step.fail("nothing to relate")
+            return False
+        subject_id, name = primary
+        place = question.entities[1][1]
+        iteration.retrieval_modes = ["facts"]
+
+        rows = self.store.connection.execute(
+            "SELECT * FROM facts WHERE subject_id = ? AND value_text LIKE ?",
+            (subject_id, f"%{place}%"),
+        ).fetchall()
+        if not rows:
+            step.satisfy([], f"the archive records no direct link between {name} and {place}")
+            return True
+
+        found = [_fact_row(row) for row in rows]
+        custody = [row for row in found if row.attribute in CUSTODY_ATTRIBUTES]
+        learned["relation_rows"] = found
+        learned["custody_rows"] = custody
+        for row in found:
+            iteration.new_claims.append(
+                f"{name} · {row.attribute.replace('_', ' ')} = {row.value_text}")
+            state.evidence_chain.append(
+                f"{name} — {row.attribute.replace('_', ' ')}: {row.value_text}")
+        step.satisfy(found, f"{len(found)} recorded link(s) to {place}")
+        return True
+
+    def _act_temporal_compare(self, question, step, state, iteration, learned) -> bool:
+        """Compare the origin year against each event year, and say what follows."""
+        iteration.retrieval_modes = ["arithmetic"]
+        year = learned.get("origin_year")
+        events = learned.get("events") or []
+        name = question.primary[1] if question.primary else "the subject"
+        place = question.entities[1][1] if len(question.entities) > 1 else "the place"
+
+        if year is None or not events:
+            missing = "an origin year" if year is None else f"any dated event at {place}"
+            state.answer_value = (
+                f"Not established. Answering this needs both {name}'s origin year and "
+                f"the dated events at {place}; the archive does not record {missing}.")
+            step.fail(f"cannot compare: missing {missing}")
+            return False
+
+        verdict = TemporalVerdict()
+        attribute = learned.get("origin_attribute", "origin")
+        for event in events:
+            verdict.findings.append(check_anachronism(
+                subject=name, subject_attribute=attribute, subject_year=year,
+                event=event.subject_name, event_place=event.place, event_year=event.year,
+            ))
+
+        custody = learned.get("custody_rows") or []
+        if custody:
+            row = custody[0]
+            verdict.custody_note = (
+                f"The archive records {name} as {row.attribute.replace('_', ' ')} "
+                f"{row.value_text}, which establishes where it is kept, not where it "
+                f"was during an earlier event.")
+
+        state.answer_value = verdict.summarise()
+        state.computation = {
+            "kind": "temporal",
+            "formula": f"{name} {attribute.replace('_', ' ')} {year} AS vs events at {place}",
+            "operands": [
+                {"subject": name, "attribute": attribute, "value": year,
+                 "value_text": f"{year} AS", "grounded": True},
+                *[{"subject": event.subject_name, "attribute": event.attribute,
+                   "value": event.year, "value_text": f"{event.place} in {event.year} AS",
+                   "grounded": True} for event in events],
+            ],
+            "result": None,
+            "result_text": state.answer_value,
+            "findings": [
+                {"event": finding.event, "event_year": finding.event_year,
+                 "subject_year": finding.subject_year, "gap_years": finding.gap,
+                 "rules_out_presence": finding.impossible}
+                for finding in verdict.findings
+            ],
+        }
+        iteration.new_claims = [finding.explain() for finding in verdict.findings]
+        state.evidence_chain.append(f"Compared: {state.computation['formula']}")
+
+        evidence = list(learned.get("origin_rows") or [])
+        evidence += [event.row for event in events]
+        step.satisfy(evidence, verdict.summarise()[:120])
         return True
 
     def _try_prose(self, operand, step, state, iteration) -> bool:
