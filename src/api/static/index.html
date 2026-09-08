@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ashen Era Archive Investigator</title>
+<style>
+  :root{
+    --bg:#12100e; --panel:#1b1815; --panel-2:#221e1a; --line:#3a332c;
+    --ink:#ece5db; --muted:#a2978a; --dim:#776e63;
+    --ember:#d98b3a; --ember-dim:#8a5a26;
+    --direct:#6fae6f; --inferred:#c9a227; --conflict:#d9683a; --unsupported:#7d7d7d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
+  a{color:var(--ember)}
+  .wrap{max-width:980px;margin:0 auto;padding:28px 20px 80px}
+  header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:4px}
+  h1{font-size:21px;margin:0;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:13px}
+  .modeline{margin:10px 0 22px;font-size:12.5px;color:var(--muted)}
+  .pill{display:inline-block;padding:2px 9px;border:1px solid var(--line);
+        border-radius:99px;margin-right:6px;background:var(--panel)}
+  .pill.on{border-color:var(--ember-dim);color:var(--ember)}
+  form{display:flex;gap:10px;margin-bottom:14px}
+  input[type=text]{flex:1;padding:13px 15px;background:var(--panel);color:var(--ink);
+        border:1px solid var(--line);border-radius:8px;font-size:15px}
+  input[type=text]:focus{outline:none;border-color:var(--ember-dim)}
+  button{padding:13px 22px;background:var(--ember);color:#1a1206;border:0;
+        border-radius:8px;font-weight:650;cursor:pointer;font-size:15px}
+  button:disabled{opacity:.5;cursor:default}
+  .opts{display:flex;gap:16px;align-items:center;font-size:12.5px;color:var(--muted);margin-bottom:20px}
+  .samples{margin:0 0 22px;font-size:12.5px;color:var(--muted)}
+  .samples b{display:block;margin-bottom:6px;color:var(--dim);font-weight:600}
+  .samples button{background:none;border:1px solid var(--line);color:var(--muted);
+        padding:5px 10px;border-radius:6px;margin:0 6px 6px 0;font-size:12.5px;font-weight:400}
+  .samples button:hover{border-color:var(--ember-dim);color:var(--ember)}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+        padding:16px 18px;margin-bottom:14px}
+  h2{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);
+        margin:0 0 12px;font-weight:700}
+  .answer{font-size:22px;line-height:1.35;font-weight:600}
+  .warn{margin-top:10px;padding:9px 12px;border-radius:7px;font-size:13px;
+        background:rgba(217,104,58,.12);border:1px solid rgba(217,104,58,.4);color:#f0a882}
+  .claim{border-left:3px solid var(--line);padding:2px 0 2px 13px;margin-bottom:14px}
+  .claim.direct{border-color:var(--direct)} .claim.inferred{border-color:var(--inferred)}
+  .claim.conflicting{border-color:var(--conflict)} .claim.unsupported{border-color:var(--unsupported)}
+  .tag{display:inline-block;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+        padding:1.5px 7px;border-radius:4px;font-weight:700;margin-right:8px}
+  .tag.direct{background:rgba(111,174,111,.18);color:var(--direct)}
+  .tag.inferred{background:rgba(201,162,39,.18);color:var(--inferred)}
+  .tag.conflicting{background:rgba(217,104,58,.18);color:var(--conflict)}
+  .tag.unsupported{background:rgba(125,125,125,.18);color:var(--unsupported)}
+  .meta{font-size:12px;color:var(--muted);margin:4px 0 6px}
+  .cite{font-size:12.5px;margin-top:3px}
+  .cite a{text-decoration:none;border-bottom:1px dotted var(--ember-dim)}
+  .cite .src{color:var(--dim)}
+  ol.chain{margin:0;padding-left:20px} ol.chain li{margin-bottom:5px}
+  .path{display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:13px}
+  .node{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:4px 10px}
+  .edge{color:var(--ember);font-size:11.5px;letter-spacing:.04em}
+  .conflict{border:1px solid rgba(217,104,58,.35);border-radius:8px;padding:12px;margin-bottom:10px}
+  .pos{margin:7px 0 7px 4px;padding-left:11px;border-left:2px solid var(--line)}
+  .pos .val{font-weight:600}
+  .res{margin-top:9px;font-size:13px;color:#f0a882}
+  .step{border-top:1px solid var(--line);padding:11px 0}
+  .step:first-of-type{border-top:0;padding-top:0}
+  .step .hd{display:flex;gap:9px;align-items:baseline;flex-wrap:wrap}
+  .num{background:var(--ember-dim);color:#1a1206;border-radius:5px;padding:1px 7px;
+        font-size:11.5px;font-weight:700}
+  .act{color:var(--ember);font-weight:600;font-size:13px}
+  .step .why{color:var(--muted);font-size:12.5px;margin:5px 0 0 34px}
+  .step .learn{font-size:12.5px;margin:4px 0 0 34px;color:#c8bfae}
+  .step .learn.rej{color:var(--conflict)}
+  .modes{font-size:12px;color:var(--dim);margin-left:34px}
+  .stop{font-size:13px}
+  .stopstat{color:var(--muted);font-size:12.5px;margin-top:6px}
+  details summary{cursor:pointer;color:var(--muted);font-size:12.5px}
+  pre{background:var(--panel-2);border:1px solid var(--line);border-radius:7px;
+      padding:11px;overflow:auto;max-height:340px;margin:9px 0 0}
+  .spin{color:var(--muted);font-size:13.5px}
+  .err{color:var(--conflict)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Ashen Era Archive Investigator</h1>
+    <span class="sub">Codefest 2026 · sub-track 1C primary, 1B secondary</span>
+  </header>
+  <div class="modeline" id="modeline">checking system…</div>
+
+  <form id="form">
+    <input type="text" id="q" autocomplete="off"
+           placeholder="Ask the archive — e.g. Whose dominion encompasses the lair of the Gravemaw Wyrm?">
+    <button type="submit" id="go">Investigate</button>
+  </form>
+  <div class="opts">
+    <label><input type="checkbox" id="llm" checked> use LLM assistance when available</label>
+    <label>max iterations <input type="number" id="iters" value="6" min="1" max="12" style="width:52px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:3px 6px"></label>
+  </div>
+
+  <div class="samples">
+    <b>Try one of these</b>
+    <button data-q="Whose dominion encompasses the lair of the Gravemaw Wyrm?">multi-hop (1B)</button>
+    <button data-q="In which year was the Gauntlet of Sorrowfell actually forged?">conflicting sources (1C)</button>
+    <button data-q="State the precise year in the Age of Shadows that marks the true founding of Gloamreach.">contested date (1C)</button>
+    <button data-q="Which accord was ultimately won by the faction of which Ederon Fellgard is a member?">two hops (1B)</button>
+    <button data-q="According to the official threat-classification plate, what numerical rating is assigned to the creature known as the Weeping Lurker?">figure plate</button>
+    <button data-q="What is the central emblem on the banner of House Morvain?">honest miss</button>
+  </div>
+
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function loadHealth(){
+  try{
+    const h = await (await fetch("/api/health")).json();
+    if(h.status !== "ready"){ $("#modeline").innerHTML = `<span class="err">${esc(h.detail||h.status)}</span>`; return; }
+    const i = h.indexes, c = h.corpus;
+    const pill = (on, label) => `<span class="pill ${on?"on":""}">${on?"●":"○"} ${label}</span>`;
+    $("#modeline").innerHTML =
+      pill(i.keyword,"keyword") + pill(i.vector,`vector (${esc(i.embedding_model)})`) +
+      pill(i.graph,"graph") + pill(i.facts,"facts") +
+      pill(i.llm, h.ai_gateway.configured ? "LLM "+esc(h.ai_gateway.model) : "LLM (no key → deterministic)") +
+      `<br><span style="color:var(--dim)">${c.documents} documents · ${c.pages} pages · ${c.chunks} chunks · ${c.tables} tables · ${c.figures} figures</span>`;
+  }catch(e){ $("#modeline").innerHTML = `<span class="err">API unreachable</span>`; }
+}
+
+function renderCite(e){
+  const where = e.page ? `p.${e.page}` : "infobox";
+  const link = `/api/documents/${encodeURIComponent(e.document_id)}/chunks${e.page?`?page=${e.page}`:""}`;
+  return `<div class="cite">└─ <a href="${link}" target="_blank">${esc(e.document)}</a>
+     <span class="src">[${esc(e.source_class)} · reliability ${e.reliability.toFixed(2)} · ${where}]</span></div>`;
+}
+
+function renderPath(path){
+  if(!path.length) return "";
+  const parts = path.map((n,i) => i%2===0
+    ? `<span class="node">${esc(n)}</span>`
+    : `<span class="edge">──${esc(n).replace(/_/g," ")}──▶</span>`);
+  return `<section><h2>Knowledge graph path</h2><div class="path">${parts.join("")}</div></section>`;
+}
+
+function render(d){
+  let h = "";
+
+  h += `<section><h2>Answer</h2><div class="answer">${esc(d.answer)}</div>`;
+  if(d.partial) h += `<div class="warn">⚠ PARTIAL — the investigation stopped before every sub-question was supported. Treat with caution.</div>`;
+  h += `</section>`;
+
+  if(d.claims?.length){
+    h += `<section><h2>Supporting claims</h2>`;
+    for(const c of d.claims){
+      h += `<div class="claim ${c.claim_type}">
+        <span class="tag ${c.claim_type}">${c.claim_type}</span>${esc(c.text)}
+        <div class="meta">confidence ${c.confidence.toFixed(2)} (${c.confidence_label})</div>
+        ${c.evidence.map(renderCite).join("")}</div>`;
+    }
+    h += `</section>`;
+  }
+
+  if(d.evidence_chain?.length)
+    h += `<section><h2>Evidence chain</h2><ol class="chain">${d.evidence_chain.map(x=>`<li>${esc(x)}</li>`).join("")}</ol></section>`;
+
+  h += renderPath(d.graph_path||[]);
+
+  if(d.conflicts?.length){
+    h += `<section><h2>Conflicting sources</h2>`;
+    for(const k of d.conflicts){
+      h += `<div class="conflict"><b>${esc(k.subject)}</b> · ${esc(k.attribute)}`;
+      for(const p of k.positions){
+        h += `<div class="pos"><span class="val">“${esc(p.value)}”</span>
+          <span class="src" style="color:var(--dim)">[${esc(p.source_class)} · reliability ${p.reliability.toFixed(2)}]</span>
+          <div class="meta">${p.sources.map(esc).join("<br>")}</div></div>`;
+      }
+      h += `<div class="res">→ ${esc(k.resolution)}</div></div>`;
+    }
+    h += `</section>`;
+  }
+
+  if(d.sub_questions?.length){
+    h += `<section><h2>Planned sub-questions</h2>`;
+    for(const s of d.sub_questions){
+      const mark = s.satisfied ? "✓" : (s.attempted ? "✗" : "·");
+      const col = s.satisfied ? "var(--direct)" : (s.attempted ? "var(--conflict)" : "var(--dim)");
+      h += `<div style="margin-bottom:7px"><span style="color:${col};font-weight:700">${mark}</span>
+        ${esc(s.text)}<div class="meta">needs: ${esc(s.completion)}${s.note?` — ${esc(s.note)}`:""}</div></div>`;
+    }
+    h += `</section>`;
+  }
+
+  if(d.trace?.length){
+    h += `<section><h2>Investigation trace</h2>`;
+    for(const t of d.trace){
+      h += `<div class="step"><div class="hd"><span class="num">${t.iteration}</span>
+        <span class="act">${esc(t.action)}</span><code>${esc(t.query)}</code></div>
+        <div class="why">${esc(t.reason)}</div>`;
+      if(t.retrieval_modes?.length) h += `<div class="modes">searched: ${t.retrieval_modes.map(esc).join(", ")}</div>`;
+      for(const c of (t.new_claims||[])){
+        const rej = c.startsWith("REJECTED");
+        h += `<div class="learn ${rej?"rej":""}">${rej?"⛔ ":"→ "}${esc(c)}</div>`;
+      }
+      if(t.new_entities?.length) h += `<div class="learn">＋ new entities: ${t.new_entities.map(esc).join(", ")}</div>`;
+      h += `</div>`;
+    }
+    h += `</section>`;
+  }
+
+  h += `<section><h2>Stopped because</h2><div class="stop">${esc(d.stop_reason)}</div>
+    <div class="stopstat">mode: ${esc(d.ai_mode)} · ${d.stats.iterations} iteration(s) ·
+      ${d.stats.queries} query/queries · ${d.stats.graph_expansions} graph expansion(s) ·
+      ${d.stats.elapsed_ms} ms</div>`;
+  if(d.fallback_events?.length)
+    h += `<div class="stopstat">fallbacks: ${d.fallback_events.map(esc).join(" · ")}</div>`;
+  if(d.stats.assist_notes?.length)
+    h += `<div class="stopstat">LLM assistance: ${d.stats.assist_notes.map(esc).join(" · ")}</div>`;
+  h += `<details style="margin-top:11px"><summary>raw JSON response</summary>
+        <pre class="mono">${esc(JSON.stringify(d,null,2))}</pre></details></section>`;
+
+  $("#out").innerHTML = h;
+}
+
+async function ask(question){
+  $("#go").disabled = true;
+  $("#out").innerHTML = `<section><div class="spin">Investigating the archive…</div></section>`;
+  try{
+    const res = await fetch("/api/questions", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({question, options:{
+        max_iterations: Number($("#iters").value)||6,
+        show_trace: true, allow_llm: $("#llm").checked }})
+    });
+    if(!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    render(await res.json());
+  }catch(e){
+    $("#out").innerHTML = `<section><div class="err">${esc(e.message)}</div></section>`;
+  }finally{ $("#go").disabled = false; }
+}
+
+$("#form").addEventListener("submit", e => {
+  e.preventDefault();
+  const q = $("#q").value.trim();
+  if(q) ask(q);
+});
+document.querySelectorAll(".samples button").forEach(b =>
+  b.addEventListener("click", () => { $("#q").value = b.dataset.q; ask(b.dataset.q); }));
+loadHealth();
+</script>
+</body>
+</html>
