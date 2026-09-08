@@ -15,27 +15,52 @@ the README does not claim otherwise:
 
 ## Where the loop currently fails
 
-Measured on the 20 development questions: **14 of 20** produce a cited answer.
-The 6 that do not are all the same failure, and it is an ingestion gap rather than
-a reasoning one — the value exists only on a chart plate (see below), or only in
-an illustration we cannot read (a banner emblem, an object held in a portrait).
+Measured on the 20 development questions — reproduce with `scripts/run_eval.py`:
 
-The loop correctly reports all six as PARTIAL with `INSUFFICIENT_EVIDENCE`, and
-for the plate cases it names the plate and explains that the value is drawn rather
-than printed. It does not guess.
+| Sub-track | Cited answers | Notes |
+|---|---|---|
+| **1C** (our primary) | **2 / 2** | both are conflict-resolution questions |
+| **1B** (our secondary) | **6 / 7** | the miss needs a relation stated only in prose |
+| 1A (not our track) | 2 / 11 | 9 of the 11 need a value that exists only in an image |
+| **total** | **10 / 20** | |
+
+The distribution is the point: we are at 2/2 on the sub-track we targeted and 6/7
+on the one we extended into. The 1A gap is real but it is an **ingestion**
+limitation, not a reasoning one — those answers are printed on illustrations
+(a banner emblem, an object held in a portrait, a bar on a chart plate), and no
+amount of better searching recovers them without a vision model.
+
+What the loop does instead of guessing: **6 of the 10 misses name the exact image
+file the user should open**, e.g.
+
+```
+ANSWER  Not established in text. The archive shows this on Heraldry plate:
+        Faction House Morvain (atmo_heraldry_faction_house_morvain.png),
+        but its content is pictorial — no label could be read from it.
+        ⚠ PARTIAL
+```
+
+All ten misses are reported as PARTIAL with an explicit stop reason. None is
+presented as an answer.
 
 ## Known limitations in what *is* built
 
 ## Known limitations in what *is* built
 
 ### Question phrasings the analyzer does not cover
-Attribute matching is phrase-based against a fixed vocabulary. "What is the
-central emblem on the banner of House Morvain" resolves `emblem`, but the value
-lives in a heraldry image, not a table. Phrasings with no attribute phrase at all
-("what object are they holding") fall through to `open_question` and full-text
-search, which retrieves the right article but cannot extract a value from it.
-**Planned fix:** a vision-model pass over heraldry and portrait plates (Phase 2),
-plus LLM-assisted attribute matching as a *fallback* behind the rule-based path.
+Attribute matching is phrase-based against a fixed vocabulary. Phrasings with no
+attribute phrase at all ("what object are they holding") fall through to
+`open_question` and full-text search, which retrieves the right article but cannot
+extract a value from it.
+**Planned fix:** LLM-assisted attribute matching as a *fallback* behind the
+rule-based path, so it can only ever add coverage, never overrule an index match.
+
+### Pictorial plates cannot be described
+Heraldry paintings and portraits carry no printed labels, so there is nothing for
+OCR to recover — and OCR over artwork returns convincing garbage
+("f ti teh Walia i { =| | eee"). We only quote a plate when its text contains a
+*recognised label*, and otherwise report the plate as pictorial and name the file.
+**Planned fix:** a vision-model pass over heraldry and portrait plates (Phase 2).
 
 ### Chart plates cannot be read
 Several figure plates draw their value as a bar against a labelled axis. OCR
@@ -116,6 +141,15 @@ answers "the accord won by Ederon Fellgard's faction" correctly and "the faction
 that won the War of Drowned Light" backwards. Rather than add grammar rules, we
 ask the index which relation the named subject actually records. One rule, both
 phrasings.
+
+### A generic "does this look like language" test for OCR output
+Our first guard against artwork OCR required three-plus real words and a high
+alphanumeric ratio. The heraldry noise `"f ti teh Walia i { =| | eee | (i"` passes
+both — it has three "words" and an 81% ratio — and was surfaced as an answer. We
+replaced the heuristic with a rule that matches how the rest of the system works:
+a plate is quotable only when we can identify *what its text is labelling*, via a
+known label phrase. Anything else is a picture we can point at but must not
+paraphrase.
 
 ### Deriving the displayed answer from the rendered evidence chain
 A convenience that broke as soon as reverse lookup landed: in a forward lookup the

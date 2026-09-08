@@ -11,8 +11,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.graph.plate_facts import is_chart_plate
+from src.graph.plate_facts import PLATE_LABELS, is_chart_plate
 from src.storage.db import ArchiveStore
+
+# Heraldry paintings and portraits carry no printed labels, so OCR over them
+# returns noise ("f ti teh Walia i { =| | eee"). Generic "does this look like
+# language" heuristics do not reliably separate that from real text — we tried,
+# and three-letter garbage passes them.
+#
+# The rule we use instead is the one the rest of the system already follows: quote
+# a plate only when we can say *what* its text is labelling. A known label phrase
+# is that proof. Everything else is a picture we can show but must not paraphrase.
+_LABEL_PHRASES = tuple(PLATE_LABELS) + ("souls under arms", "per the", "as entered into")
+
+
+def has_readable_label(value: str) -> bool:
+    """True when the OCR text contains a recognised plate label."""
+    lowered = " ".join(value.lower().split())
+    return any(phrase in lowered for phrase in _LABEL_PHRASES)
 
 
 @dataclass
@@ -27,8 +43,18 @@ class FigureHit:
 
     @property
     def readable(self) -> bool:
-        """True when the plate prints its value rather than plotting it."""
-        return bool(self.ocr_text.strip()) and not self.is_chart
+        """True when the plate prints a legible value rather than plotting it.
+
+        Three ways a plate can fail to answer, all reported differently from
+        "no evidence": it has no text, its text is OCR noise from artwork, or its
+        value is drawn on a scale.
+        """
+        return has_readable_label(self.ocr_text) and not self.is_chart
+
+    @property
+    def pictorial(self) -> bool:
+        """A plate whose meaning is the image itself — heraldry, a portrait."""
+        return not has_readable_label(self.ocr_text)
 
 
 class FigureIndex:

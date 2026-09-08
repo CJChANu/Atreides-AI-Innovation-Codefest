@@ -50,3 +50,17 @@ def test_chart_plates_assert_nothing():
 
 def test_subject_is_read_from_the_caption():
     assert subject_from_caption("Creature plate: Weeping Lurker") == "Weeping Lurker"
+
+
+def test_a_plate_is_only_quoted_when_its_label_is_recognised():
+    """Heraldry plates have no labels; OCR over them returns convincing garbage.
+
+    Generic 'does this look like language' tests do not catch it — three-letter
+    noise passes them. Requiring a known label is the rule that holds.
+    """
+    from src.retrieval.figures import has_readable_label
+
+    assert not has_readable_label("f ti teh Walia i { =| | eee | (i")
+    assert not has_readable_label("")
+    assert has_readable_label("Weeping Lurker THREAT RATING 3 of 10, per the Vanguard scale")
+    assert has_readable_label("Marrowwatch RECORDED GARRISON STRENGTH 3,107 souls under arms")

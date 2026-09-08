@@ -424,20 +424,24 @@ class Investigator:
             step.satisfy([], f"value found on plate {hit.figure_id}")
             return True
 
-        # Found the plate, cannot read the value off it. Saying that is far more
-        # useful than reporting the text record's "None recorded" as the answer.
-        iteration.new_claims.append(
-            f"the value is shown on {hit.caption} as a plotted scale, not a printed "
-            f"number; OCR cannot recover it"
-        )
-        state.evidence_chain.append(
-            f"{hit.caption} — value drawn on a scale; not machine-readable"
-        )
+        # Found the plate, cannot read the value off it. Naming the plate and the
+        # reason is far more useful than reporting "None recorded" as the answer —
+        # it tells the user exactly which page to open.
+        if hit.pictorial:
+            detail = ("its content is pictorial — no label could be read from it")
+            note = "value exists only as artwork"
+        else:
+            detail = ("the value is plotted on a scale rather than printed, so it "
+                      "cannot be read reliably")
+            note = "value exists only as a chart plate"
+
+        iteration.new_claims.append(f"{hit.caption}: {detail}")
+        state.evidence_chain.append(f"{hit.caption} — {detail}")
         state.answer_value = (
-            f"Not established in text. The value is shown on {hit.caption}, "
-            f"but it is plotted rather than printed and cannot be read reliably."
+            f"Not established in text. The archive shows this on {hit.caption} "
+            f"({hit.asset_path.rsplit('/', 1)[-1]}), but {detail}."
         )
-        step.fail("value exists only as a chart plate")
+        step.fail(note)
         return True
 
     # -- helpers ------------------------------------------------------------

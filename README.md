@@ -177,7 +177,20 @@ python scripts/run_eval.py
 A keyword lookup "answers" all twenty questions because it always returns *a
 passage* — which is exactly why answered-count alone is a misleading metric. The
 loop's later iterations do not find more answers; they find the **conflicts** and
-resolve them, which is what takes 14 answers from unverified to supported.
+resolve them, which is what drops the partial count from 20 to 6.
+
+By sub-track:
+
+| Sub-track | Cited answers |
+|---|---|
+| **1C — Searching the Way a Human Does** (primary) | **2 / 2** |
+| **1B — Connecting Facts Across Thousands of Pages** (secondary) | **6 / 7** |
+| 1A — Rich Answers (not our track) | 2 / 11 |
+
+The 1A gap is an ingestion limitation, not a reasoning one: those values are
+printed on illustrations. Rather than guess, the loop names the exact image file
+to open and marks the answer PARTIAL — see
+[docs/limitations.md](docs/limitations.md).
 
 ## Test
 
