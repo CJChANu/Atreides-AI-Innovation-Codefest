@@ -1,0 +1,15 @@
+{
+  "_comment": "Paraphrased questions written by the team, deliberately avoiding the archive's own wording. Each names the document its answer lives in. This probe exists because the 20 supplied development questions use archive vocabulary almost verbatim, so they cannot show what semantic retrieval adds - and claiming a benefit we had not measured would be exactly the unvalidated assertion the challenge warns about.",
+  "probes": [
+    {"q": "which side came out on top in the drowned light conflict", "expect_doc_contains": "the_war_of_drowned_light"},
+    {"q": "how many soldiers are stationed at the citadel of Greyfell", "expect_doc_contains": "greyfell_citadel"},
+    {"q": "what beast makes its home at Marrowwell Abbey", "expect_doc_contains": "gravemaw_wyrm"},
+    {"q": "who holds power over Marrowwell Abbey", "expect_doc_contains": "marrowwell_abbey"},
+    {"q": "when was the settlement of Gloamreach first established", "expect_doc_contains": "gloamreach"},
+    {"q": "what noble family claims descent from the last Sunder-Kings", "expect_doc_contains": "house_morvain"},
+    {"q": "where was the Gauntlet of Sorrowfell manufactured", "expect_doc_contains": "sorrowfell"},
+    {"q": "how dangerous is the creature that weeps", "expect_doc_contains": "weeping_lurker"},
+    {"q": "what secretive priesthood rewrites history", "expect_doc_contains": "silent_choir"},
+    {"q": "which stronghold sits in the Weeping Marshes", "expect_doc_contains": "crookgate"}
+  ]
+}
