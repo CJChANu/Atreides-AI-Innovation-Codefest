@@ -1,0 +1,40 @@
+{
+  "_comment": "Questions written by the team against the archive, to probe behaviour the 20 supplied development questions do not reach. `expect` is a substring the answer must contain; `expect_none` marks questions the archive genuinely cannot answer, where the correct behaviour is an honest refusal rather than a guess. Every expected value was verified against the fact store before the question was written.",
+  "questions": [
+    {"id": "a01", "kind": "attribute", "q": "What is the threat rating of the Gravemaw Wyrm?", "expect": "8"},
+    {"id": "a02", "kind": "attribute", "q": "Where does the Gravemaw Wyrm lair?", "expect": "Marrowwell Abbey"},
+    {"id": "a03", "kind": "attribute", "q": "What is the garrison strength of Marrowwell Abbey?", "expect": "6656"},
+    {"id": "a04", "kind": "attribute", "q": "In which year was Marrowwell Abbey founded?", "expect": "235 AS"},
+    {"id": "a05", "kind": "attribute", "q": "Who rules Marrowwell Abbey?", "expect": "Bleeding Crown"},
+    {"id": "a06", "kind": "attribute", "q": "What artifact class is the Gauntlet of Sorrowfell?", "expect": "regalia"},
+    {"id": "a07", "kind": "attribute", "q": "What is the attunement cost of the Gauntlet of Sorrowfell?", "expect": "12"},
+    {"id": "a08", "kind": "attribute", "q": "Where was the Gauntlet of Sorrowfell forged?", "expect": "Vharencrag"},
+    {"id": "a09", "kind": "attribute", "q": "Where is the Gauntlet of Sorrowfell housed?", "expect": "Greyfell Citadel"},
+    {"id": "a10", "kind": "attribute", "q": "In which year was Ederon Fellgard born?", "expect": "338 AS"},
+    {"id": "a11", "kind": "attribute", "q": "What is the role of Ederon Fellgard?", "expect": "Sapper"},
+    {"id": "a12", "kind": "attribute", "q": "What is the seat of the Iron-Ring Cartel?", "expect": "Hollowreach"},
+    {"id": "a13", "kind": "attribute", "q": "Who was the victor of the War of Drowned Light?", "expect": "Silent Choir"},
+    {"id": "a14", "kind": "attribute", "q": "In which year did the War of Drowned Light begin?", "expect": "225 AS"},
+    {"id": "a15", "kind": "attribute", "q": "What is the seat of House Morvain?", "expect": "Ironfell Citadel"},
+    {"id": "a16", "kind": "attribute", "q": "What is the threat rating of the Ashfall Colossus?", "expect": "9"},
+
+    {"id": "h01", "kind": "multi_hop", "q": "Which faction rules the place where the Gravemaw Wyrm lairs?", "expect": "Bleeding Crown"},
+    {"id": "h02", "kind": "multi_hop", "q": "Which faction is Ederon Fellgard a member of, and where is it seated?", "expect": "Hollowreach"},
+    {"id": "h03", "kind": "multi_hop", "q": "Who rules the place where the Gauntlet of Sorrowfell is housed?", "expect": ""},
+    {"id": "h04", "kind": "multi_hop_3", "q": "Which region contains the place where the Gravemaw Wyrm lairs?", "expect": "Gloaming Reach"},
+
+    {"id": "c01", "kind": "conflict", "q": "In which year was Emberdeep truly founded?", "expect": "65 AS"},
+    {"id": "c02", "kind": "conflict", "q": "In which year was the Edge of Gloamreach actually forged?", "expect": "303 AS"},
+
+    {"id": "i01", "kind": "inverse", "q": "Which creature lairs in Marrowwell Abbey?", "expect": "Gravemaw Wyrm"},
+    {"id": "i02", "kind": "inverse", "q": "Which faction is seated at Ironfell Citadel?", "expect": "Morvain"},
+
+    {"id": "p01", "kind": "paraphrase", "q": "How many defenders hold Marrowwell Abbey?", "expect": "6656"},
+    {"id": "p02", "kind": "paraphrase", "q": "Who came out on top in the War of Drowned Light?", "expect": "Silent Choir"},
+    {"id": "p03", "kind": "paraphrase", "q": "What beast makes its home at Marrowwell Abbey?", "expect": "Gravemaw Wyrm"},
+
+    {"id": "n01", "kind": "no_answer", "q": "What is the Gravemaw Wyrm's favourite food?", "expect_none": true},
+    {"id": "n02", "kind": "no_answer", "q": "Who is the current ruler of Atlantis?", "expect_none": true},
+    {"id": "n03", "kind": "no_answer", "q": "How many siblings does Ederon Fellgard have?", "expect_none": true}
+  ]
+}
