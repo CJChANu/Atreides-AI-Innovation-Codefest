@@ -19,6 +19,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.models import AskRequest, AskResponse
 from src.api.service import to_response
@@ -33,7 +34,11 @@ app = FastAPI(
     version="2.0.0",
 )
 
-UI_PATH = Path(__file__).parent / "static" / "index.html"
+STATIC_DIR = Path(__file__).parent / "static"
+UI_PATH = STATIC_DIR / "index.html"
+
+# The UI's stylesheet, sandstorm engine and optional logo.png live here.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def _store() -> ArchiveStore:
