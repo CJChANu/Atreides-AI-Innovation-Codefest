@@ -41,6 +41,11 @@ MIN_DOC_COUNT = 2
 
 _TOKEN = re.compile(r"[a-z][a-z'-]{1,}", re.IGNORECASE)
 
+# Texts per hosted-embedding request. Small enough to stay under a free tier's
+# per-request token cap; a provider's rate limit is handled by falling back, not
+# by waiting out a multi-hour build.
+API_BATCH_SIZE = 8
+
 
 def tokenize(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN.findall(text)]
@@ -145,31 +150,55 @@ def fit_local_model(texts: list[str], *, dimensions: int = LOCAL_DIMENSIONS) -> 
 class EmbeddingAdapter:
     """Chooses the hosted embedding API when configured, LSA otherwise."""
 
-    def __init__(self, settings, model: LocalEmbeddingModel | None = None) -> None:
+    def __init__(self, settings, model: LocalEmbeddingModel | None = None, *,
+                 force_local: bool = False) -> None:
+        """`force_local` pins the adapter to LSA regardless of configuration.
+
+        This is not a convenience switch. A query must be embedded by the *same*
+        model that built the index it is searched against — an API key appearing
+        in the environment must never cause 1024-dimension query vectors to be
+        compared with a 256-dimension LSA index. `load_adapter` sets this from
+        the model name recorded in the index itself.
+        """
         self.settings = settings
         self.local = model
-        self.use_api = bool(settings.embedding_api_key)
+        self.use_api = bool(settings.embedding_api_key) and not force_local
         self.name = settings.embedding_model if self.use_api else LocalEmbeddingModel.name
+        self.api_error = ""
 
     def embed(self, texts: list[str]) -> np.ndarray:
         if self.use_api:
             try:
-                return self._embed_via_api(texts)
-            except Exception:
+                return self._embed_via_api_batched(texts)
+            except Exception as error:
                 # An embedding outage must not take the whole index with it; LSA
-                # is already built and is a complete substitute.
+                # is a complete substitute. Recorded so the caller can report it.
+                self.api_error = f"{type(error).__name__}: {str(error)[:180]}"
                 self.use_api = False
                 self.name = LocalEmbeddingModel.name
         if self.local is None:
             raise RuntimeError("no local embedding model fitted; run build_indexes.py")
         return self.local.embed(texts)
 
+    def _embed_via_api_batched(self, texts: list[str]) -> np.ndarray:
+        """Embed in batches sized for a hosted provider's per-request token cap.
+
+        Providers cap tokens per request *and* requests per minute. Free tiers cap
+        both hard — Voyage without a payment method allows 3 RPM and 10K TPM,
+        which is roughly two hours for this corpus. We therefore probe with the
+        first batch and let the caller decide, rather than silently starting a
+        multi-hour build.
+        """
+        chunks = [texts[i:i + API_BATCH_SIZE] for i in range(0, len(texts), API_BATCH_SIZE)]
+        vectors = [self._embed_via_api(batch) for batch in chunks]
+        return _l2_normalise(np.vstack(vectors))
+
     def _embed_via_api(self, texts: list[str]) -> np.ndarray:
         import json as _json
         import urllib.request
 
         request = urllib.request.Request(
-            f"{self.settings.llm_base_url.rstrip('/')}/embeddings",
+            f"{self.settings.embedding_base_url.rstrip('/')}/embeddings",
             data=_json.dumps({"model": self.settings.embedding_model, "input": texts}).encode(),
             headers={"Authorization": f"Bearer {self.settings.embedding_api_key}",
                      "Content-Type": "application/json"},

@@ -16,17 +16,27 @@ frequently in a table or on a plate rather than in a sentence.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from src.ai_gateway.embeddings import EmbeddingAdapter, LocalEmbeddingModel, fit_local_model
+from src.ai_gateway.embeddings import (
+    API_BATCH_SIZE,
+    EmbeddingAdapter,
+    LocalEmbeddingModel,
+    fit_local_model,
+)
 from src.storage.db import ArchiveStore
 
 # Long chunks are truncated before embedding: the first part of a chunk carries
 # its heading and topic, and the tail mostly dilutes the vector.
 MAX_EMBED_CHARS = 2000
+# Refuse a hosted embedding build slower than this and use LSA instead. Two
+# minutes is generous for 2,547 chunks on a paid tier and impossible on a
+# rate-limited free one, which is exactly the distinction we want to draw.
+MAX_HOSTED_BUILD_SECONDS = 120.0
 
 
 @dataclass
@@ -79,14 +89,26 @@ class VectorIndex:
         chunk_ids = [r["chunk_id"] for r in rows]
         texts = [r["content"][:MAX_EMBED_CHARS] for r in rows]
 
-        adapter = EmbeddingAdapter(settings)
-        if not adapter.use_api:
-            model_path = settings.data_dir / "lsa_model.npz"
-            model = fit_local_model(texts)
-            model.save(model_path)
-            adapter = EmbeddingAdapter(settings, model)
+        model_path = settings.data_dir / "lsa_model.npz"
+        note = ""
+
+        # LSA is fitted unconditionally, and first. It costs seven seconds, and it
+        # means every later failure has a complete substitute already in hand —
+        # rather than discovering at chunk 2,000 that there is nothing to fall
+        # back to and leaving a half-built index behind.
+        local = fit_local_model(texts)
+        local.save(model_path)
+        adapter = EmbeddingAdapter(settings, local, force_local=True)
+
+        hosted = EmbeddingAdapter(settings, local)
+        if hosted.use_api:
+            feasible, note = self._hosted_is_feasible(hosted, texts)
+            if feasible:
+                adapter = hosted
 
         self.vectors = adapter.embed(texts)
+        if adapter.use_api is False and adapter.api_error:
+            note = f"hosted embeddings failed mid-build ({adapter.api_error}); used local LSA"
         self.chunk_ids = chunk_ids
         self.model_name = adapter.name
         self.save()
@@ -95,7 +117,34 @@ class VectorIndex:
             "dimensions": int(self.vectors.shape[1]),
             "model": self.model_name,
             "index_bytes": self.path.stat().st_size,
+            **({"note": note} if note else {}),
         }
+
+    @staticmethod
+    def _hosted_is_feasible(adapter, texts: list[str]) -> tuple[bool, str]:
+        """Time one batch and refuse a hosted build that would take too long.
+
+        A single successful call proves the key works; it says nothing about the
+        provider's *rate* limit, which is what actually decides whether a build is
+        possible. Voyage without a payment method allows 3 requests/minute and
+        10,000 tokens/minute — around two hours for this corpus — so we measure
+        throughput and fall back rather than hang.
+        """
+        started = time.perf_counter()
+        try:
+            adapter._embed_via_api(texts[:API_BATCH_SIZE])
+        except Exception as error:
+            return False, (f"hosted embeddings unavailable "
+                           f"({type(error).__name__}: {str(error)[:120]}); used local LSA")
+
+        per_batch = time.perf_counter() - started
+        batches = (len(texts) + API_BATCH_SIZE - 1) // API_BATCH_SIZE
+        estimate = per_batch * batches
+        if estimate > MAX_HOSTED_BUILD_SECONDS:
+            return False, (f"hosted build estimated at {estimate / 60:.0f} min "
+                           f"({per_batch:.1f}s per {API_BATCH_SIZE} chunks — free-tier "
+                           f"rate limit); used local LSA instead")
+        return True, ""
 
     # -- search -------------------------------------------------------------
 
@@ -103,6 +152,15 @@ class VectorIndex:
         if not self.ready:
             return []
         assert self.vectors is not None
+        # A dimension mismatch means the query was embedded by a different model
+        # than the index. Failing loudly beats a silent broadcast error that the
+        # caller swallows and reports as "no semantic results".
+        if query_vector.reshape(-1).shape[0] != self.vectors.shape[1]:
+            raise ValueError(
+                f"query vector has {query_vector.reshape(-1).shape[0]} dimensions but "
+                f"the index was built with {self.vectors.shape[1]} by model "
+                f"'{self.model_name}' — rebuild with scripts/build_indexes.py"
+            )
         # Both sides are unit-length, so the dot product *is* the cosine.
         scores = self.vectors @ query_vector.reshape(-1)
         count = min(limit, scores.shape[0])
@@ -116,5 +174,6 @@ def load_adapter(settings, index: VectorIndex) -> EmbeddingAdapter:
     if index.model_name == LocalEmbeddingModel.name:
         model_path = settings.data_dir / "lsa_model.npz"
         if model_path.is_file():
-            return EmbeddingAdapter(settings, LocalEmbeddingModel.load(model_path))
+            return EmbeddingAdapter(settings, LocalEmbeddingModel.load(model_path),
+                                force_local=True)
     return EmbeddingAdapter(settings)
