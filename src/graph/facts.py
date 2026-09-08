@@ -21,7 +21,8 @@ from dataclasses import dataclass
 
 from src.common.provenance import reliability_of
 from src.graph.entities import display_name, normalise
-from src.graph.plate_facts import extract_plate_facts, subject_from_caption
+from src.graph.plate_chart import read_chart_plate
+from src.graph.plate_facts import extract_plate_facts, is_chart_plate, subject_from_caption
 from src.ingestion.parsers.markdown_parser import WIKILINK
 from src.storage.db import ArchiveStore
 
@@ -221,12 +222,22 @@ class FactExtractor:
         """Facts printed on figure plates, cited to the figure's own page."""
         rows = self.store.connection.execute(
             """SELECT c.chunk_id, c.document_id, c.content, c.page_start, c.source_class,
-                      f.caption, f.ocr_text, f.figure_id
+                      f.caption, f.ocr_text, f.figure_id, f.asset_path
                FROM chunks c
                JOIN documents d ON d.document_id = c.document_id
                LEFT JOIN figures f ON f.figure_id = c.figure_ids
                WHERE c.content_type = 'figure' AND d.superseded_by IS NULL"""
         ).fetchall()
+
+        # A plate's subject comes from its filename, which has lost the archive's
+        # punctuation: "plate_13_artifact_the_cinder_wrought_aegis" gives "The
+        # Cinder Wrought Aegis". That normalises to the right subject_id, so
+        # lookups already work, but the name is what a reader sees in a citation.
+        # The entity table holds the archive's own spelling for the same id.
+        canonical = {
+            row["entity_id"]: row["name"]
+            for row in self.store.connection.execute("SELECT entity_id, name FROM entities")
+        }
 
         payload: list[tuple] = []
         for row in rows:
@@ -235,8 +246,26 @@ class FactExtractor:
             subject_id = normalise(subject_raw)
             if not subject_id:
                 continue
+            subject_raw = canonical.get(subject_id, subject_raw)
             reliability = reliability_of(row["source_class"])
-            for attribute, value, number in extract_plate_facts(caption, row["content"]):
+            found = extract_plate_facts(caption, row["content"])
+
+            # A chart plate prints its value as a bar against labelled reference
+            # bars, so the label grammar above yields nothing on it by design.
+            # Reading it off the drawing recovers values that exist nowhere else
+            # in the archive — the Cinder-Wrought Aegis' attunement cost is only
+            # ever drawn. `read_chart_plate` returns None unless the bar and the
+            # printed number agree, so this never trades honesty for coverage.
+            if not found and row["asset_path"] and is_chart_plate(
+                f"{caption} {row['content']}"
+            ):
+                reading = read_chart_plate(row["asset_path"], caption=caption,
+                                           subject=subject_raw)
+                if reading is not None:
+                    found = [(reading.attribute, reading.value_text,
+                              reading.value_number)]
+
+            for attribute, value, number in found:
                 payload.append((subject_id, display_name(subject_raw), attribute, value,
                                 value_key(value), number, row["chunk_id"], row["document_id"],
                                 row["page_start"], row["source_class"], reliability))

@@ -21,17 +21,20 @@ Measured on the 20 development questions — reproduce with `scripts/run_eval.py
 |---|---|---|
 | **1C** (our primary) | **2 / 2** | both are conflict-resolution questions |
 | **1B** (our secondary) | **6 / 7** | the miss needs a relation stated only in prose |
-| 1A (not our track) | 2 / 11 | 9 of the 11 need a value that exists only in an image |
-| **total** | **10 / 20** | |
+| 1A (not our track) | 6 / 11 | the remaining 5 need a value that exists only as artwork |
+| **total** | **14 / 20** | |
 
 The distribution is the point: we are at 2/2 on the sub-track we targeted and 6/7
-on the one we extended into. The 1A gap is real but it is an **ingestion**
-limitation, not a reasoning one — those answers are printed on illustrations
-(a banner emblem, an object held in a portrait, a bar on a chart plate), and no
-amount of better searching recovers them without a vision model.
+on the one we extended into. 1A moved from 2/11 to 6/11 when the chart-plate
+reader landed (see below): those four answers were drawn as bars, and reading the
+drawing rather than the OCR text recovers them exactly.
 
-What the loop does instead of guessing: **6 of the 10 misses name the exact image
-file the user should open**, e.g.
+The remaining 1A gap is an **ingestion** limitation, not a reasoning one — those
+answers are painted rather than plotted (a banner emblem, an object held in a
+portrait), and no amount of better searching recovers them without a vision model.
+
+What the loop does instead of guessing: **each remaining miss names the exact
+image file the user should open**, e.g.
 
 ```
 ANSWER  Not established in text. The archive shows this on Heraldry plate:
@@ -40,7 +43,7 @@ ANSWER  Not established in text. The archive shows this on Heraldry plate:
         ⚠ PARTIAL
 ```
 
-All ten misses are reported as PARTIAL with an explicit stop reason. None is
+Every miss is reported as PARTIAL with an explicit stop reason. None is
 presented as an answer.
 
 ## External API reality (measured 8 Sep 2026, on our own accounts)
@@ -134,17 +137,38 @@ OCR to recover — and OCR over artwork returns convincing garbage
 *recognised label*, and otherwise report the plate as pictorial and name the file.
 **Planned fix:** a vision-model pass over heraldry and portrait plates (Phase 2).
 
-### Chart plates cannot be read
-Several figure plates draw their value as a bar against a labelled axis. OCR
-recovers the axis ticks and not the bar, so a number lifted from such a plate is
-as likely to be an axis maximum as the answer. We detect these and extract
-nothing rather than assert a value we cannot justify (see decision D7).
+### Chart plates: now read geometrically (was: could not be read)
+Several figure plates draw their value as a bar against labelled reference bars.
+Plain OCR recovers the reference numbers and not the bar, so a number lifted from
+the text alone is as likely to be a scale tick as the answer — which is why
+`extract_plate_facts` still refuses them (decision D7).
 
-**Effect:** four plate facts we would like are unavailable — Emberdeep's garrison
-total and the attunement costs on the Thrice-Bound Edge, the Thrice-Bound Lantern
-and the Cinder-Wrought Aegis. Sample questions `1a_001`, `1a_004`, `1a_007` and
-`1a_013` therefore cannot currently be answered from the plate.
-**Planned fix:** a vision-model pass over the plate image (Phase 2).
+`src/graph/plate_chart.py` now reads them from the drawing instead. Bars are
+solid rectangles, so their pixel length is exact; the subject's bar is drawn in
+its own colour and labelled with the subject's *name*, while the references carry
+tier names. Fitting length against the reference values calibrates a scale that
+the subject's bar is then read against.
+
+The calibration is also an error check, and it earns its keep: tesseract misreads
+this archive's stylised digits often enough to matter — it returns "25" for the
+Thrice-Bound Lantern's bold "55", and "95" for a "55" reference on the
+Thrice-Bound Edge plate. Neither survives the geometry, because a bar shorter
+than the "85" bar cannot be a 95. The line is therefore fitted pairwise and the
+outliers dropped, and a value is reported only when the drawing and the printing
+agree — or, on a small integer scale, when the drawing alone lands cleanly on a
+step and the disagreement is stated in the trace.
+
+**Effect:** all five chart plates now yield facts — Emberdeep's garrison strength
+(1,114), the Marsh Revenant's threat rating (4), and the attunement costs of the
+Thrice-Bound Edge (94), the Thrice-Bound Lantern (55) and the Cinder-Wrought
+Aegis (34). The Aegis' cost exists nowhere else in the archive.
+
+**Still limited:** the reader needs at least two reference bars and a subject bar
+in a distinct colour. A chart drawn any other way, or one whose subject bar is
+unlabelled, returns nothing and falls back to naming the plate as before. It also
+never *invents* precision: above a small integer scale the geometry is
+proportional only, so an unreadable printed number means no answer rather than an
+estimate.
 
 ### Multi-line table cells are truncated
 The fact extractor matches key/value rows line by line, so a codex cell that wraps
