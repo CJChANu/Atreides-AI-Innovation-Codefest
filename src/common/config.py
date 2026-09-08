@@ -96,8 +96,15 @@ class Settings:
 
     # --- LLM / embeddings (OpenAI-compatible gateway, see docs/decisions.md) ---
     llm_base_url: str = "https://openrouter.ai/api/v1"
-    llm_model: str = "meta-llama/llama-3.3-70b-instruct:free"
+    # Free-tier model IDs churn: OpenRouter moved llama-3.3-70b off the free tier
+    # mid-project and started returning 404 for the ':free' slug. This default is
+    # one we verified end to end, and it is overridable from .env precisely
+    # because the next rotation will break it too.
+    llm_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
     llm_api_key: str | None = None
+    # Embeddings usually live behind a *different* provider from the chat model
+    # (Voyage keys do not work against OpenRouter), so they get their own base URL.
+    embedding_base_url: str = "https://api.voyageai.com/v1"
     embedding_model: str = "voyage-4-lite"
     embedding_api_key: str | None = None
 
@@ -133,8 +140,10 @@ def load_settings() -> Settings:
             max_seconds=_env_float("AEA_MAX_SECONDS", 120.0),
         ),
         llm_base_url=os.environ.get("AEA_LLM_BASE_URL", "https://openrouter.ai/api/v1"),
-        llm_model=os.environ.get("AEA_LLM_MODEL", "meta-llama/llama-3.3-70b-instruct:free"),
+        llm_model=os.environ.get("AEA_LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
         llm_api_key=os.environ.get("AEA_LLM_API_KEY"),
+        embedding_base_url=os.environ.get("AEA_EMBEDDING_BASE_URL",
+                                          "https://api.voyageai.com/v1"),
         embedding_model=os.environ.get("AEA_EMBEDDING_MODEL", "voyage-4-lite"),
         embedding_api_key=os.environ.get("AEA_EMBEDDING_API_KEY"),
         chunk_target_chars=_env_int("AEA_CHUNK_TARGET_CHARS", 1200),

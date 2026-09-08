@@ -221,6 +221,18 @@ class AIGateway:
             # Every failure mode ends the same way: tell the caller to fall back.
             self.note_fallback(f"{capability}: {type(error).__name__}")
             return None
+        except Exception as error:
+            # Belt and braces. The whole point of this gateway is that an external
+            # service can never take the system down, so an *unanticipated*
+            # provider quirk must degrade exactly like an anticipated one. It is
+            # recorded distinctly so a genuine bug is still visible in the audit
+            # log rather than silently swallowed.
+            elapsed = (time.perf_counter() - started) * 1000
+            self.usage.append(UsageRecord(capability, self.model, False, False, elapsed,
+                                          f"UNEXPECTED {type(error).__name__}: {error}"))
+            self.breaker.record_failure()
+            self.note_fallback(f"{capability}: unexpected {type(error).__name__}")
+            return None
 
         elapsed = (time.perf_counter() - started) * 1000
         self.usage.append(UsageRecord(capability, self.model, False, True, elapsed))
@@ -267,6 +279,15 @@ class AIGateway:
             raise TransientError(f"timed out after {self.timeout}s") from None
 
         try:
-            return payload["choices"][0]["message"]["content"]
+            content = payload["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise SchemaViolation("provider response had no message content") from None
+
+        # Observed in the wild: some free models return `content: null` (reasoning
+        # models that put their output elsewhere, or an empty completion). Left
+        # unchecked this reaches the JSON parser as None and raises an
+        # AttributeError, which is NOT a GatewayError — so it escapes the
+        # resilience wrapper and crashes the caller instead of falling back.
+        if not isinstance(content, str) or not content.strip():
+            raise SchemaViolation("provider returned empty message content")
+        return content
