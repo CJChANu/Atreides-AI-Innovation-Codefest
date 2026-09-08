@@ -7,7 +7,7 @@ the CLI renderer and the HTTP response are demonstrably reading the same state.
 from __future__ import annotations
 
 from src.api.models import AskResponse, ClaimOut, EvidenceRef
-from src.generation.answer import PARTIAL_STOPS, headline
+from src.generation.answer import headline, is_partial
 from src.orchestration.state import Investigation
 
 
@@ -72,7 +72,7 @@ def to_response(state: Investigation, store, title_of, fallback_events: list[str
     return AskResponse(
         question=state.question.text,
         answer=headline(state),
-        partial=state.stop_reason in PARTIAL_STOPS,
+        partial=is_partial(state),
         ai_mode=state.ai_mode,
         claims=claims,
         evidence_chain=state.evidence_chain,

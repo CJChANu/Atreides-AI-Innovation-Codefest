@@ -22,6 +22,20 @@ PARTIAL_STOPS = {StopReason.ITERATION_BUDGET, StopReason.QUERY_BUDGET,
                  StopReason.INSUFFICIENT_EVIDENCE, StopReason.NO_ENTITY}
 
 
+def is_partial(state: Investigation) -> bool:
+    """Whether the answer must carry the PARTIAL warning.
+
+    The stop reason alone is not enough. An open question can legitimately satisfy
+    every sub-question ("relevant passages retrieved") and still produce no
+    grounded claim — which reached the user as an uncaveated answer reading "No
+    recorded value answers this directly". An answer with nothing supporting it is
+    partial no matter how cleanly the loop finished.
+    """
+    if state.stop_reason in PARTIAL_STOPS:
+        return True
+    return all(c.claim_type is ClaimType.UNSUPPORTED for c in state.claims)
+
+
 def headline(state: Investigation) -> str:
     """The one-line answer, taken from the highest-value claim available."""
     if state.answer_value:
@@ -48,7 +62,7 @@ def render(state: Investigation, title_of, *, show_trace: bool = True) -> str:
     question = state.question
     lines: list[str] = []
 
-    partial = state.stop_reason in PARTIAL_STOPS
+    partial = is_partial(state)
     lines.append("═" * 74)
     lines.append(f"QUESTION  {question.text}")
     lines.append("═" * 74)

@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.ai_gateway.gateway import AIGateway  # noqa: E402
 from src.common.config import SETTINGS  # noqa: E402
-from src.generation.answer import PARTIAL_STOPS, headline  # noqa: E402
+from src.generation.answer import headline, is_partial  # noqa: E402
 from src.indexes.vector import VectorIndex, load_adapter  # noqa: E402
 from src.orchestration.investigator import Investigator  # noqa: E402
 from src.retrieval.hybrid import HybridRetriever  # noqa: E402
@@ -70,7 +70,7 @@ def run_mode(store, questions, *, use_vector: bool, use_llm: bool,
         "cited": sum(1 for s in states if any(c.evidence for c in s.claims)),
         "conflicts": sum(1 for s in states if s.conflicts),
         "multi_hop": sum(1 for s in states if s.graph_expansions),
-        "partial": sum(1 for s in states if s.stop_reason in PARTIAL_STOPS),
+        "partial": sum(1 for s in states if is_partial(s)),
         "ms": elapsed * 1000,
         "by_track": {t: (sum(v), len(v)) for t, v in sorted(by_track.items())},
         "answers": [headline(s) for s in states],
@@ -105,7 +105,12 @@ def main() -> int:
 
     print(f"{len(questions)} development questions")
     print(f"LLM: {'configured — ' + SETTINGS.llm_model if gateway_probe.configured else 'not configured (deterministic modes only)'}")
-    print(f"Embeddings: {'local LSA' if not SETTINGS.embedding_api_key else SETTINGS.embedding_model}\n")
+    # Report the model the index was actually built with, not the one configured:
+    # a hosted build can fall back to LSA, and saying otherwise would misreport
+    # what was measured.
+    probe_index = VectorIndex(SETTINGS.data_dir / "vectors.npz")
+    built_with = probe_index.model_name if probe_index.load() else "(no vector index)"
+    print(f"Embeddings: index built with {built_with}\n")
 
     header = (f"{'configuration':<28}{'cited':>7}{'answered':>10}{'conflicts':>11}"
               f"{'multihop':>10}{'partial':>9}{'ms/q':>8}")

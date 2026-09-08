@@ -154,3 +154,18 @@ def test_the_serialised_trace_is_self_contained(store, investigator):
     assert payload["answer"] == "The Bleeding Crown"
     assert payload["investigation"]["stop_reason"]
     assert payload["trace"] and payload["evidence_chain"]
+
+
+def test_an_answer_with_no_supported_claim_is_marked_partial(investigator):
+    """A clean stop is not the same as a grounded answer.
+
+    An open question can satisfy every sub-question ('relevant passages
+    retrieved') and still ground nothing. Before this was fixed, such an answer
+    reached the user with no PARTIAL warning at all.
+    """
+    from src.generation.answer import is_partial
+
+    state = investigator.investigate("What colour is the Gravemaw Wyrm's left eye?")
+    if any(c.claim_type is not ClaimType.UNSUPPORTED for c in state.claims):
+        pytest.skip("this question grounded a claim on the fixture corpus")
+    assert is_partial(state)
