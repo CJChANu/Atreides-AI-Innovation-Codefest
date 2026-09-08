@@ -45,12 +45,30 @@ ATTRIBUTE_ALIASES = {
     "belligerent in": "belligerent_in",
     "known members": "known_members",
     "victor": "victor", "outcome": "outcome",
+    # Membership is stated four different ways across the wiki and the codexes.
+    # Collapsing them is what makes a "member of the faction that won X" hop
+    # possible without special-casing each source.
+    "membership": "member_of", "member of": "member_of",
+    "member": "has_member", "known members": "has_member", "members": "has_member",
+    "victor of": "victor_of", "won": "victor_of",
+    "service": "serves_at", "place of service": "serves_at",
+    "lair region": "lair", "known lair-region": "lair",
+    "primary domain": "primary_domain",
 }
 
 # Rows whose label is one of these carry no fact — they restate the subject or
 # label the grid itself.
 SKIP_LABELS = {"name", "subject", "field", "value", "classification", "record",
-               "columns", "recorded description"}
+               "columns", "recorded description", "entry", "register", "registry field"}
+
+# The flattened retrieval text of a table starts with a "Columns: A | B" line,
+# which looks exactly like a data row. Dropping it removes ~110 junk facts.
+_COLUMNS_HEADER = re.compile(r"^columns\s*:", re.IGNORECASE)
+
+# Codex timeline grids are keyed by year ("225 AS | The War ... began"). The year
+# is the *value*, not the attribute, so we relabel rather than create one
+# attribute per year.
+_YEAR_LABEL = re.compile(r"^\d{1,4}\s*AS$", re.IGNORECASE)
 
 _ROW = re.compile(r"^\s*(?P<label>[^|]{1,60}?)\s*\|\s*(?P<value>.+?)\s*$")
 _NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
@@ -69,7 +87,12 @@ class FactReport:
 
 
 def normalise_attribute(label: str) -> str | None:
-    cleaned = label.strip().strip("|*").strip().lower()
+    cleaned = label.strip().strip("|*").strip()
+    if _COLUMNS_HEADER.match(cleaned):
+        return None
+    if _YEAR_LABEL.match(cleaned):
+        return "timeline_event"
+    cleaned = cleaned.lower()
     if not cleaned or cleaned in SKIP_LABELS:
         return None
     if cleaned in ATTRIBUTE_ALIASES:

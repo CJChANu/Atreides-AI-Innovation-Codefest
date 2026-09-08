@@ -45,6 +45,11 @@ FIELD_PREDICATES = {
     "participants": "participant_in",
     "wielder": "wielded_by",
     "seat of": "seat_of",
+    "membership": "member_of",
+    "member": "has_member", "members": "has_member",
+    "victor of": "victor_of", "won": "victor_of",
+    "service": "serves_at", "place of service": "serves_at",
+    "known lair-region": "lairs_in", "lair region": "lairs_in",
 }
 
 _TABLE_ROW = re.compile(r"^(?P<field>[^|]+)\|(?P<value>.+)$")
