@@ -23,13 +23,19 @@ from __future__ import annotations
 import time
 
 from src.common.config import InvestigationBudget
+from src.common.provenance import reliability_of
 from src.graph.fact_query import AttributeView, FactQuery, FactRow
+from src.graph.facts import numeric_value
+from src.graph.plate_facts import is_figure_attribute
+from src.graph.prose_facts import extract as prose_extract
+from src.graph.prose_facts import search_queries as prose_queries
 from src.graph.query import GraphQuery
 from src.orchestration.planner import decompose, next_action
 from src.orchestration.state import (
     Intent,
     Investigation,
     Iteration,
+    Operand,
     Question,
     StopReason,
     SubQuestion,
@@ -46,6 +52,12 @@ from src.verification.conflicts import describe_conflict
 # How many text hits to keep per search. Enough to show the evidence, small
 # enough that a trace stays readable.
 TEXT_HITS = 6
+
+# Prose fallback searches wider than a normal lookup. The sentence stating a
+# value is often in a document *about something else* — the Aegis' forging year
+# is item two of a contract concerning a different relic — so it ranks below the
+# subject's own pages and is missed at the usual depth.
+PROSE_HITS = 12
 
 # Relations the archive records from one side only. Reading the stored row from
 # the other end is the same assertion, so a lookup may fall back to the inverse.
@@ -191,13 +203,29 @@ class Investigator:
             state.iterations.append(iteration)
 
             # A round that produced no new evidence is the honest signal that the
-            # archive has no more to give on this question.
+            # archive has no more to give on this question — but only once every
+            # *required* fact has actually been looked for. A question that names
+            # four things and stalls on the first must still try the other three:
+            # stopping there reports "no new evidence" about a search that never
+            # happened.
             stale_rounds = 0 if progressed else stale_rounds + 1
-            if stale_rounds >= self.budget.stale_rounds_before_stop:
+            if (stale_rounds >= self.budget.stale_rounds_before_stop
+                    and not self._required_work_remains(state)):
                 state.stop_reason = StopReason.NO_NEW_EVIDENCE
                 break
 
         return self._finish(state, started)
+
+    @staticmethod
+    def _required_work_remains(state: Investigation) -> bool:
+        """True while a required fact has not yet been searched for.
+
+        Only the operand steps count. A conflict check or an assembly step has
+        nothing of its own to find — they read what the lookups gathered — so
+        they must never keep an exhausted investigation alive.
+        """
+        return any(step.key.startswith("operand:") and not step.attempted
+                   for step in state.sub_questions)
 
     @staticmethod
     def _settle_trivial_conflict(action: str, step: SubQuestion, learned: dict) -> bool:
@@ -217,8 +245,21 @@ class Investigator:
         if action == "conflict_check":
             step.satisfy([], "no competing values recorded for any value read"
                              if views else "no values were read, so nothing could conflict")
-        else:
-            step.fail("only one value was recorded, so there is nothing to rank")
+            return True
+
+        # Nothing to rank. Asking for "the *true* threat rating" when only one
+        # rating is recorded is answered by that rating — the question presumed a
+        # disagreement the archive does not have. Failing the step instead marked
+        # the whole investigation unresolved and reported a correct answer as
+        # partial, which is the opposite of what the evidence supports.
+        if not views:
+            step.fail("no values were found to rank")
+            return True
+
+        _, rows = views[0].best()
+        step.satisfy(rows, f"only one value is recorded, so it stands without "
+                           f"ranking: '{rows[0].value_text}' "
+                           f"({rows[0].source_class})")
         return True
 
     def _orient_hop(self, question: Question) -> None:
@@ -250,6 +291,7 @@ class Investigator:
             "fact_scan": self._act_fact_scan,
             "fact_lookup": self._act_fact_lookup,
             "operand_lookup": self._act_operand_lookup,
+            "assemble": self._act_assemble,
             "compute": self._act_compute,
             "report_gap": self._act_report_gap,
             "inverse_lookup": self._act_inverse_lookup,
@@ -272,11 +314,17 @@ class Investigator:
 
         view = self.facts.lookup(operand.subject_id, operand.attribute)
         if view is None:
-            # No plate fallback here on purpose. Values printed or drawn on
+            # No table holds it. Before giving up, read the prose — the archive
+            # states some values only in a sentence, and a source that has been
+            # retrieved but not read is not a source that failed.
+            #
+            # No plate fallback here on purpose: values printed or drawn on
             # plates are already lifted into the fact store at build time, and a
             # step that "succeeded" by naming a plate it could not read would
             # leave the operand ungrounded while looking satisfied — exactly the
             # confusion the operand split exists to remove.
+            if self._try_prose(operand, step, state, iteration):
+                return True
             operand.note = f"no {operand.attribute.replace('_', ' ')} recorded"
             step.fail(operand.note)
             iteration.new_claims = [f"{operand.describe()}: nothing recorded"]
@@ -285,7 +333,16 @@ class Investigator:
         _, rows = view.best()
         display = rows[0].value_text
         number = next((row.value_number for row in rows if row.value_number is not None), None)
-        if number is None or _is_non_value(display):
+
+        if _is_non_value(display):
+            # The source explicitly declines to state this. It is not an answer,
+            # whether or not the requirement wanted a number.
+            operand.note = f"the archive records '{display}'"
+            step.fail(operand.note)
+            iteration.new_claims = [f"{operand.describe()}: '{display}'"]
+            return False
+
+        if operand.must_be_numeric and number is None:
             operand.note = (f"the archive records '{display}' for "
                             f"{operand.attribute.replace('_', ' ')}, which is not a number")
             step.fail(operand.note)
@@ -300,6 +357,76 @@ class Investigator:
         state.evidence_chain.append(f"{operand.subject_name} — "
                                     f"{operand.attribute.replace('_', ' ')}: {display}")
         step.satisfy(rows, f"{operand.attribute} = {display}")
+        return True
+
+    def _try_prose(self, operand, step, state, iteration) -> bool:
+        """Look for the value stated in a sentence, when no table records it.
+
+        Retrieval already finds the right passage for these; what was missing was
+        reading it. The match is pinned to the sentence it came from, so the
+        claim cites a real chunk and a reader can check the wording.
+        """
+        iteration.retrieval_modes.append("hybrid" if self.retriever else "keyword")
+        for query in prose_queries(operand.subject_name, operand.attribute):
+            hits = self._text_search(query, entities=[operand.subject_name],
+                                     limit=PROSE_HITS)
+            state.queries_issued += 1
+            iteration.retrieved_chunks.extend(hit.chunk_id for hit in hits)
+            for hit in hits:
+                found = prose_extract(hit.content, operand.subject_name, operand.attribute)
+                if found is None:
+                    continue
+                row = self._row_from_hit(hit, operand, found.value_text)
+                operand.value = numeric_value(found.value_text)
+                operand.value_text = found.value_text
+                operand.evidence = [row]
+                operand.note = "read from prose; no table records it"
+                iteration.new_claims.append(
+                    f"{operand.describe()} = {found.value_text} — stated in prose, not a "
+                    f"table: “{found.quote()}”"
+                )
+                state.evidence_chain.append(
+                    f"{operand.subject_name} — {operand.attribute.replace('_', ' ')}: "
+                    f"{found.value_text}"
+                )
+                step.satisfy([row], f"{operand.attribute} = {found.value_text} (from prose)")
+                return True
+        return False
+
+    def _row_from_hit(self, hit, operand, value_text: str) -> FactRow:
+        """A citable fact row for a value read out of a retrieved passage."""
+        return FactRow(
+            subject_id=operand.subject_id, subject_name=operand.subject_name,
+            attribute=operand.attribute, value_text=value_text,
+            value_key=value_text.lower(), value_number=numeric_value(value_text),
+            chunk_id=hit.chunk_id, document_id=hit.document_id,
+            page=getattr(hit, "page", None), source_class=hit.source_class,
+            reliability=reliability_of(hit.source_class),
+        )
+
+    def _act_assemble(self, question, step, state, iteration, learned) -> bool:
+        """Report every requested fact together, once each one is established."""
+        iteration.retrieval_modes = ["facts"]
+        parts = [f"{operand.describe()}: {operand.value_text}"
+                 for operand in question.operands]
+        state.answer_value = "; ".join(parts)
+        state.computation = {
+            "kind": "multi_fact",
+            "formula": "",
+            "operands": [
+                {"subject": operand.subject_name, "attribute": operand.attribute,
+                 "value": operand.value, "value_text": operand.value_text,
+                 "grounded": True,
+                 "citations": [row.citation(self.facts.title_of(row.document_id))
+                               for row in operand.evidence[:2]]}
+                for operand in question.operands
+            ],
+            "result": None,
+            "result_text": state.answer_value,
+        }
+        iteration.new_claims = parts
+        step.satisfy([row for operand in question.operands for row in operand.evidence],
+                     f"all {len(question.operands)} requested facts established")
         return True
 
     def _act_compute(self, question, step, state, iteration, learned) -> bool:
@@ -372,15 +499,26 @@ class Investigator:
         detail = "; ".join(operand.note for operand in missing if operand.note)
         held = "; ".join(f"{operand.describe()} = {operand.value_text}" for operand in found)
 
-        state.answer_value = (
-            f"Not established. This asks for "
-            f"{question.calculation.formula(question.operands) if question.calculation else 'a calculation'}"
-            f", but the archive records no value for {names}"
-            + (f" ({detail})" if detail else "")
-            + (f". It does record {held}." if held else ".")
-        )
+        if question.calculation is not None:
+            state.answer_value = (
+                f"Not established. This asks for "
+                f"{question.calculation.formula(question.operands)}, but the archive "
+                f"records no value for {names}"
+                + (f" ({detail})" if detail else "")
+                + (f". It does record {held}." if held else ".")
+            )
+        else:
+            # A part-answered question leads with what it *did* establish. The
+            # asker wanted several facts; burying the three we found under the
+            # one we did not is the least useful way to report that.
+            state.answer_value = (
+                (f"{held}. " if held else "")
+                + f"Not recorded: {names}"
+                + (f" ({detail})" if detail else "")
+                + f". {len(found)} of {len(question.operands)} requested facts established."
+            )
         state.computation = {
-            "kind": question.calculation.kind if question.calculation else "",
+            "kind": question.calculation.kind if question.calculation else "multi_fact",
             "formula": question.calculation.formula(question.operands)
                        if question.calculation else "",
             "operands": [
@@ -392,9 +530,13 @@ class Investigator:
             "result": None,
             "result_text": "not established",
         }
-        iteration.new_claims = [f"calculation refused: no value for {names}"]
-        state.evidence_chain.append(f"Calculation not possible: {names} is not recorded")
-        step.fail(f"missing operand: {names}")
+        if question.calculation is not None:
+            iteration.new_claims = [f"calculation refused: no value for {names}"]
+            state.evidence_chain.append(f"Calculation not possible: {names} is not recorded")
+        else:
+            iteration.new_claims = [f"{len(missing)} requested fact(s) not recorded: {names}"]
+            state.evidence_chain.append(f"Not recorded anywhere searched: {names}")
+        step.fail(f"missing: {names}")
         return False
 
     def _act_fact_scan(self, question, step, state, iteration, learned) -> bool:
@@ -541,6 +683,17 @@ class Investigator:
         if attribute and self._try_figure(question, step, state, iteration, attribute):
             return True
 
+        # Or it may be stated in a sentence that no table mirrors. This is the
+        # same fallback the multi-fact path uses, and the single-lookup case is
+        # the common one: "in which year was the Aegis forged" has an answer in
+        # the corpus, in prose, in a document about a different relic.
+        if attribute and subject_name:
+            operand = Operand(subject_id=subject_id, subject_name=subject_name,
+                              attribute=attribute)
+            if self._try_prose(operand, step, state, iteration):
+                state.answer_value = state.answer_value or operand.value_text
+                return True
+
         query = f"{subject_name or ''} {attribute or ''}".strip()
         hits = self._text_search(query, entities=[subject_name] if subject_name else None)
         iteration.retrieval_modes.append("hybrid" if self.retriever else "keyword")
@@ -646,7 +799,17 @@ class Investigator:
         return False
 
     def _try_figure(self, question, step, state, iteration, attribute) -> bool:
-        """Look for the value on a figure plate, and say so if it is unreadable."""
+        """Look for the value on a figure plate, and say so if it is unreadable.
+
+        Only for attributes a plate could actually carry. Every entity has a
+        plate of some kind — a portrait, a banner, a landscape — and offering one
+        of those as the explanation for a missing housing location is worse than
+        saying nothing: it tells the reader to open a painting that was never
+        going to answer them, and it buries the fact that the value is a text
+        lookup that failed.
+        """
+        if not is_figure_attribute(attribute):
+            return False
         primary = question.primary
         if primary is None:
             return False

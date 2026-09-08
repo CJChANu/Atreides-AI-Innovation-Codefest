@@ -245,6 +245,14 @@ class QuestionAnalyzer:
                 end = start + len(phrase)
                 before_ok = start == 0 or not lowered[start - 1].isalnum()
                 after_ok = end >= len(lowered) or not lowered[end].isalnum()
+                # A comparison asks for "the threat rating*s* of A and B". The
+                # vocabulary is singular, so without this the plural form matches
+                # nothing and the question silently loses its attribute — which
+                # is how comparing two creatures ended up answering about one.
+                if not after_ok and lowered[end] == "s":
+                    plural_end = end + 1
+                    if plural_end >= len(lowered) or not lowered[plural_end].isalnum():
+                        after_ok, end = True, plural_end
                 if before_ok and after_ok and not any(consumed[start:end]):
                     for index in range(start, end):
                         consumed[index] = True
@@ -291,6 +299,102 @@ class QuestionAnalyzer:
                 return kind
         return None
 
+    def _corrected_attributes(self, text: str) -> list[tuple[str, int, int]]:
+        """Attribute spans, with place/time siblings resolved from the question.
+
+        The archive uses one word, "forged", for two attributes: where and when.
+        `match_attribute` already reads the question word to pick the right one
+        for a single lookup; the same reasoning has to be applied here, or
+        "Where were the Edge and the Lantern forged" compares forging *years*.
+
+        A question can also ask for both at once — "Where *and in which year* was
+        it forged" — in which case both siblings are required, not one of them.
+        """
+        found = self.locate_attributes(text)
+        wants_place = bool(PLACE_WORDS.match(text)) or bool(
+            re.search(r"\bwhere\b|\bin which (place|city|hold|keep|fortress|region)\b",
+                      text, re.IGNORECASE))
+        wants_time = bool(TIME_WORDS.match(text)) or bool(
+            re.search(r"\bwhen\b|\bin (which|what) year\b|\bwhat year\b",
+                      text, re.IGNORECASE))
+
+        corrected: list[tuple[str, int, int]] = []
+        for attribute, start, end in found:
+            sibling = ATTRIBUTE_SIBLINGS.get(attribute)
+            if sibling is None:
+                corrected.append((attribute, start, end))
+                continue
+
+            pair = {attribute, sibling}
+            place = next((item for item in pair if item in PLACE_ATTRS), None)
+            time = next((item for item in pair if item in TIME_ATTRS), None)
+
+            # Both asked for: the one word carries two requirements.
+            if wants_place and wants_time and place and time:
+                corrected.append((place, start, end))
+                corrected.append((time, start, end))
+                continue
+            if wants_place and place:
+                corrected.append((place, start, end))
+                continue
+            if wants_time and time:
+                corrected.append((time, start, end))
+                continue
+            corrected.append((attribute, start, end))
+
+        corrected.sort(key=lambda item: (item[1], item[0]))
+        return corrected
+
+    def build_requirements(self, text: str) -> list[Operand]:
+        """Every (subject, attribute) this question asks to be established.
+
+        A long question is a list of small ones. "Where and in which year was the
+        Aegis forged, and where is it housed" asks for three separate facts about
+        one subject; "compare the threat ratings of A and B" asks for the same
+        fact about two subjects. Both used to collapse to whichever single
+        attribute matched first, and the rest of the question was silently
+        dropped — the loop reported "all sub-questions supported" having answered
+        a third of what was asked.
+
+        Unlike `build_operands` this accepts non-numeric attributes, because a
+        forging site is a perfectly good thing to be asked for.
+        """
+        entities = self.locate_entities(text)
+        attributes = self._corrected_attributes(text)
+        if not entities or not attributes:
+            return []
+
+        requirements: list[Operand] = []
+        seen: set[tuple[str, str]] = set()
+
+        distinct = {attribute for attribute, _, _ in attributes}
+        # One attribute, several subjects: a comparison. The attribute applies to
+        # each of them ("the threat ratings of the Lurker and the Revenant").
+        if len(distinct) == 1 and len(entities) > 1:
+            attribute = next(iter(distinct))
+            for (subject_id, name), _, _ in entities:
+                if (subject_id, attribute) not in seen:
+                    seen.add((subject_id, attribute))
+                    requirements.append(
+                        Operand(subject_id=subject_id, subject_name=name, attribute=attribute))
+            return requirements
+
+        # Otherwise attach each attribute to its own subject by position, exactly
+        # as a reader would: the nearest name before it, else the nearest after.
+        for attribute, start, end in attributes:
+            before = [item for item in entities if item[2] <= start]
+            after = [item for item in entities if item[1] >= end]
+            chosen = before[-1] if before else (after[0] if after else None)
+            if chosen is None:
+                continue
+            (subject_id, name), _, _ = chosen
+            if (subject_id, attribute) in seen:
+                continue
+            seen.add((subject_id, attribute))
+            requirements.append(
+                Operand(subject_id=subject_id, subject_name=name, attribute=attribute))
+        return requirements
+
     def build_operands(self, text: str) -> list[Operand]:
         """Pair every numeric attribute in the question with its own subject.
 
@@ -320,7 +424,7 @@ class QuestionAnalyzer:
                 continue
             seen.add((subject_id, attribute))
             operands.append(Operand(subject_id=subject_id, subject_name=name,
-                                    attribute=attribute))
+                                    attribute=attribute, must_be_numeric=True))
 
         # "the difference between the garrison strength of Marrowwatch and
         # Thorncairn" names the attribute once and the subjects twice. The
@@ -332,7 +436,8 @@ class QuestionAnalyzer:
         if len(operands) < 2 and len(numeric) == 1 and len(entities) >= 2:
             shared = next(iter(numeric))
             operands = [
-                Operand(subject_id=subject_id, subject_name=name, attribute=shared)
+                Operand(subject_id=subject_id, subject_name=name, attribute=shared,
+                        must_be_numeric=True)
                 for (subject_id, name), _, _ in entities
             ]
         return operands
@@ -417,6 +522,21 @@ class QuestionAnalyzer:
                 filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
                 operands=operands, calculation=calculation,
             )
+
+        # A question asking for several distinct facts is several questions. This
+        # is checked *after* the hop test on purpose: "the faction of which X is a
+        # member, and what it won" also names two attributes, but it is one chain,
+        # not two independent lookups, and splitting it would break the hop.
+        if not (bridge and attribute and attribute != bridge):
+            requirements = self.build_requirements(text)
+            if len(requirements) > 1:
+                return Question(
+                    text=text, intent=Intent.MULTI_FACT, entities=entities,
+                    attribute=attribute, answer_type=self._answer_type(text, attribute),
+                    expects_conflict=expects_conflict,
+                    filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
+                    operands=requirements,
+                )
 
         if bridge and attribute and attribute != bridge:
             intent = Intent.RELATION_HOP

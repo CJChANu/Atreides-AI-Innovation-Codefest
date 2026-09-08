@@ -77,8 +77,13 @@ class InvestigationBudget:
     terminate, and it must be able to say which limit stopped it.
     """
 
-    max_iterations: int = 6
-    max_queries: int = 24
+    # Sized for the longest question the archive actually invites: one asking
+    # for four or five separate facts, each of which is its own sub-question and
+    # may cost a fact lookup plus a prose search. The ceiling is a safety net,
+    # not a work target — the loop stops when its plan is satisfied, which for a
+    # plain lookup is still two iterations.
+    max_iterations: int = 12
+    max_queries: int = 48
     max_graph_hops: int = 3
     stale_rounds_before_stop: int = 2
     max_seconds: float = 120.0
@@ -133,8 +138,8 @@ def load_settings() -> Settings:
             source_quality=_env_float("AEA_W_SOURCE", 0.10),
         ),
         budget=InvestigationBudget(
-            max_iterations=_env_int("AEA_MAX_ITERATIONS", 6),
-            max_queries=_env_int("AEA_MAX_QUERIES", 24),
+            max_iterations=_env_int("AEA_MAX_ITERATIONS", 12),
+            max_queries=_env_int("AEA_MAX_QUERIES", 48),
             max_graph_hops=_env_int("AEA_MAX_GRAPH_HOPS", 3),
             stale_rounds_before_stop=_env_int("AEA_STALE_ROUNDS", 2),
             max_seconds=_env_float("AEA_MAX_SECONDS", 120.0),

@@ -22,9 +22,11 @@ def _calculation(kind: str, operands: list[Operand], numerator=0, denominator=1)
 
 
 def _pair() -> list[Operand]:
+    # Calculation operands demand a number: "None recorded" must not satisfy one.
     return [
-        Operand("embermarch", "Embermarch", "garrison_strength"),
-        Operand("the_cinder_wrought_aegis", "The Cinder-Wrought Aegis", "attunement_cost"),
+        Operand("embermarch", "Embermarch", "garrison_strength", must_be_numeric=True),
+        Operand("the_cinder_wrought_aegis", "The Cinder-Wrought Aegis", "attunement_cost",
+                must_be_numeric=True),
     ]
 
 

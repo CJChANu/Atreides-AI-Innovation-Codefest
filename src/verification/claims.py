@@ -53,6 +53,11 @@ def build_claims(state: Investigation, facts) -> list[Claim]:
     for step in state.sub_questions:
         if not step.satisfied or not step.evidence:
             continue
+        # The assembly step carries every operand's evidence so the answer can
+        # cite it, but each of those facts already produced its own claim. Its
+        # only contribution here would be a duplicate of the first one.
+        if step.key == "assemble":
+            continue
         rows = step.evidence
         view = _view_for(rows)
         if view:

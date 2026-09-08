@@ -60,6 +60,28 @@ def decompose(question: Question) -> list[SubQuestion]:
         ))
         return subs
 
+    if question.intent is Intent.MULTI_FACT and question.operands:
+        # One atomic sub-question per requested fact, then a step that assembles
+        # them. Splitting before retrieval is what stops a four-part question
+        # being marked complete after answering its first part.
+        subs = [
+            SubQuestion(f"operand:{index}",
+                        f"What {requirement.attribute.replace('_', ' ')} is recorded "
+                        f"for {requirement.subject_name}?",
+                        f"a recorded value for {requirement.attribute.replace('_', ' ')} "
+                        f"on {requirement.subject_name}, with a citation")
+            for index, requirement in enumerate(question.operands)
+        ]
+        subs.append(SubQuestion(
+            "assemble", "What do those facts say together?",
+            "every requested fact established, or explicitly reported as missing",
+        ))
+        subs.append(SubQuestion(
+            "conflict", "Do sources disagree about any of them?",
+            "competing values checked for each requested fact",
+        ))
+        return subs
+
     if question.intent is Intent.INVERSE_HOP:
         target = question.attribute or "attribute"
         return [
@@ -117,6 +139,15 @@ def next_action(question: Question, pending: list[SubQuestion], learned: dict) -
         return ("operand_lookup", f"{operand.subject_name} {attribute}",
                 f"the calculation needs {operand.subject_name}'s {attribute}; "
                 f"read it before any arithmetic is attempted")
+
+    if step.key == "assemble":
+        missing = question.ungrounded_operands
+        if missing:
+            return ("report_gap", ", ".join(o.describe() for o in missing),
+                    f"{len(missing)} of the {len(question.operands)} requested facts "
+                    f"are not recorded; the answer must say which")
+        return ("assemble", question.text,
+                "every requested fact is established, so they can be reported together")
 
     if step.key == "compute":
         missing = question.ungrounded_operands

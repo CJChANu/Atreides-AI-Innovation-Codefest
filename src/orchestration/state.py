@@ -22,6 +22,7 @@ class Intent(str, Enum):
     RELATION_HOP = "relation_hop"                # "who rules the lair of X"
     INVERSE_HOP = "inverse_hop"                  # "which faction has X as a member"
     CALCULATION = "calculation"                  # "what percentage of X's a is Y's b"
+    MULTI_FACT = "multi_fact"                    # "where and when was X forged, and where is it housed"
     OPEN_QUESTION = "open_question"              # anything else; falls back to text search
 
 
@@ -134,17 +135,24 @@ class Claim:
 
 @dataclass
 class Operand:
-    """One (subject, attribute) pair a question needs a *number* for.
+    """One (subject, attribute) pair the question requires a value for.
 
-    A calculation question names two of these and is answerable only when both
-    are grounded. Keeping them as first-class objects — rather than reusing the
-    single `attribute` slot — is what lets the loop notice that it has one value
-    and not the other, instead of quietly answering with the half it found.
+    Every question that asks for more than one thing — a calculation over two
+    quantities, a comparison of two creatures, a four-part question about one
+    relic — becomes a list of these. Keeping them as first-class objects, rather
+    than reusing the single `attribute` slot, is what lets the loop notice that
+    it has one value and not the other instead of quietly answering with the
+    half it found.
+
+    `must_be_numeric` separates the two uses: arithmetic needs a number and must
+    reject "None recorded", while a comparison is perfectly well served by a
+    place name.
     """
 
     subject_id: str
     subject_name: str
     attribute: str
+    must_be_numeric: bool = False
     # Filled in once the fact store yields a value for this pair.
     value: float | None = None
     value_text: str = ""
@@ -153,7 +161,13 @@ class Operand:
 
     @property
     def grounded(self) -> bool:
-        return self.value is not None
+        """True when this requirement has been met by real evidence.
+
+        Arithmetic needs a number and nothing else will do; a comparison or a
+        multi-part lookup is satisfied by whatever the archive recorded, which
+        is usually a place or a name.
+        """
+        return self.value is not None if self.must_be_numeric else bool(self.value_text)
 
     def describe(self) -> str:
         return f"{self.subject_name}'s {self.attribute.replace('_', ' ')}"
