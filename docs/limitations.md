@@ -43,7 +43,79 @@ ANSWER  Not established in text. The archive shows this on Heraldry plate:
 All ten misses are reported as PARTIAL with an explicit stop reason. None is
 presented as an answer.
 
+## External API reality (measured 8 Sep 2026, on our own accounts)
+
+Both keys work. Neither hosted service is usable at the scale this project needs
+on a free tier, and the system is built to say so rather than hang.
+
+| Service | Key status | What actually happens |
+|---|---|---|
+| OpenRouter (LLM) | works | `meta-llama/llama-3.3-70b-instruct:free` returns **404 — no longer free**. `nvidia/nemotron-3-super-120b-a12b:free` works and is now the default. Free-tier model IDs churn, so this is a `.env` setting by design. |
+| Voyage (embeddings) | works | A single call returns correct 1024-dim vectors. Bulk indexing returns **429**: without a payment method the account is capped at **3 requests/min and 10,000 tokens/min** — about **two hours** for this corpus. |
+
+**Consequence, and the decision:** the shipped vector index is local LSA. The
+hosted path stays wired, tested and one config change away — `build_indexes.py`
+times a hosted batch, estimates the full build, and falls back with a printed
+reason if it would exceed two minutes:
+
+```
+note  hosted embeddings unavailable (HTTPError: HTTP Error 429); used local LSA
+```
+
+This is not a workaround for a missing capability. LSA is deterministic, offline
+and free, which for a live demo on a rate-limited tier is worth more than a
+marginal quality gain — and its benefit over keyword-only is measured (D15).
+
+**What LLM assistance actually buys**, on the 20 development questions:
+
+| | cited | answered | multi-hop found | ms/question |
+|---|---:|---:|---:|---:|
+| hybrid + loop | 10 | 10 | 5 | 2 |
+| hybrid + loop + LLM | 10 | 13 | 8 | ~6,700 |
+
+It finds three more multi-hop chains and produces three more concrete answers, and
+it costs roughly 3,000× the latency. It adds **no cited answers** — the citations
+come from the fact store either way, which is the intended design. Results also
+vary slightly between runs, because free-tier rate limiting makes some calls fail
+and fall back; that variance is visible in the trace as fallback events.
+
 ## Known limitations in what *is* built
+
+## External API reality (measured 8 Sep 2026, on our own accounts)
+
+Both keys work. Neither hosted service is usable at the scale this project needs
+on a free tier, and the system is built to say so rather than hang.
+
+| Service | Key status | What actually happens |
+|---|---|---|
+| OpenRouter (LLM) | works | `meta-llama/llama-3.3-70b-instruct:free` returns **404 — no longer free**. `nvidia/nemotron-3-super-120b-a12b:free` works and is now the default. Free-tier model IDs churn, so this is a `.env` setting by design. |
+| Voyage (embeddings) | works | A single call returns correct 1024-dim vectors. Bulk indexing returns **429**: without a payment method the account is capped at **3 requests/min and 10,000 tokens/min** — about **two hours** for this corpus. |
+
+**Consequence, and the decision:** the shipped vector index is local LSA. The
+hosted path stays wired, tested and one config change away — `build_indexes.py`
+times a hosted batch, estimates the full build, and falls back with a printed
+reason if it would exceed two minutes:
+
+```
+note  hosted embeddings unavailable (HTTPError: HTTP Error 429); used local LSA
+```
+
+This is not a workaround for a missing capability. LSA is deterministic, offline
+and free, which for a live demo on a rate-limited tier is worth more than a
+marginal quality gain — and its benefit over keyword-only is measured (D15).
+
+**What LLM assistance actually buys**, on the 20 development questions:
+
+| | cited | answered | multi-hop found | ms/question |
+|---|---:|---:|---:|---:|
+| hybrid + loop | 10 | 10 | 5 | 2 |
+| hybrid + loop + LLM | 10 | 13 | 8 | ~6,700 |
+
+It finds three more multi-hop chains and produces three more concrete answers, and
+it costs roughly 3,000× the latency. It adds **no cited answers** — the citations
+come from the fact store either way, which is the intended design. Results also
+vary slightly between runs, because free-tier rate limiting makes some calls fail
+and fall back; that variance is visible in the trace as fallback events.
 
 ## Known limitations in what *is* built
 

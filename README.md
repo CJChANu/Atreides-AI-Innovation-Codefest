@@ -122,7 +122,15 @@ OpenRouter key in `.env`:
 
 ```bash
 AEA_LLM_API_KEY=sk-or-...
+AEA_LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free
 ```
+
+> **Free-tier model IDs churn.** `meta-llama/llama-3.3-70b-instruct:free` was free
+> when this project started and now returns 404. If you see that, pick a current
+> free model from <https://openrouter.ai/models> and set `AEA_LLM_MODEL`.
+> An embedding key is also supported, but see
+> [docs/limitations.md](docs/limitations.md) — free-tier rate limits make a hosted
+> index build impractical, and the build detects this and falls back to LSA.
 
 The system then uses the LLM for question understanding, gap-directed query
 suggestion and candidate-claim extraction from narrative prose — under the guards
