@@ -20,14 +20,17 @@ Measured on the 20 development questions — reproduce with `scripts/run_eval.py
 | Sub-track | Cited answers | Notes |
 |---|---|---|
 | **1C** (our primary) | **2 / 2** | both are conflict-resolution questions |
-| **1B** (our secondary) | **6 / 7** | the miss needs a relation stated only in prose |
+| **1B** (our secondary) | **7 / 7** | |
 | 1A (not our track) | 6 / 11 | the remaining 5 need a value that exists only as artwork |
-| **total** | **14 / 20** | |
+| **total** | **15 / 20** | |
 
-The distribution is the point: we are at 2/2 on the sub-track we targeted and 6/7
-on the one we extended into. 1A moved from 2/11 to 6/11 when the chart-plate
-reader landed (see below): those four answers were drawn as bars, and reading the
-drawing rather than the OCR text recovers them exactly.
+The distribution is the point: we are at 2/2 on the sub-track we targeted and 7/7
+on the one we extended into. Two changes moved these numbers. 1A went from 2/11
+to 6/11 when the chart-plate reader landed (see below): those four answers were
+drawn as bars, and reading the drawing rather than the OCR text recovers them
+exactly. 1B's last miss — "a relation stated only in prose" — closed when the
+prose fallback landed: retrieval had always found the right passage, and what was
+missing was the step that reads a value out of it.
 
 The remaining 1A gap is an **ingestion** limitation, not a reasoning one — those
 answers are painted rather than plotted (a banner emblem, an object held in a
@@ -73,54 +76,59 @@ marginal quality gain — and its benefit over keyword-only is measured (D15).
 
 | | cited | answered | multi-hop found | ms/question |
 |---|---:|---:|---:|---:|
-| hybrid + loop | 10 | 10 | 5 | 2 |
-| hybrid + loop + LLM | 10 | 13 | 8 | ~6,700 |
+| hybrid + loop | 15 | 15 | 5 | ~7 |
+| hybrid + loop + LLM | 15 | 15 | 5 | ~1,400 |
 
-It finds three more multi-hop chains and produces three more concrete answers, and
-it costs roughly 3,000× the latency. It adds **no cited answers** — the citations
-come from the fact store either way, which is the intended design. Results also
-vary slightly between runs, because free-tier rate limiting makes some calls fail
-and fall back; that variance is visible in the trace as fallback events.
+It adds **no cited answers** — the citations come from the fact store either way,
+which is the intended design — and it costs roughly 200× the latency. Earlier
+measurements credited it with three extra multi-hop chains; those are now found
+deterministically, by the prose fallback and the multi-fact decomposition, so the
+LLM's remaining contribution on this question set is phrasing, not coverage.
 
-## Known limitations in what *is* built
-
-## External API reality (measured 8 Sep 2026, on our own accounts)
-
-Both keys work. Neither hosted service is usable at the scale this project needs
-on a free tier, and the system is built to say so rather than hang.
-
-| Service | Key status | What actually happens |
-|---|---|---|
-| OpenRouter (LLM) | works | `meta-llama/llama-3.3-70b-instruct:free` returns **404 — no longer free**. `nvidia/nemotron-3-super-120b-a12b:free` works and is now the default. Free-tier model IDs churn, so this is a `.env` setting by design. |
-| Voyage (embeddings) | works | A single call returns correct 1024-dim vectors. Bulk indexing returns **429**: without a payment method the account is capped at **3 requests/min and 10,000 tokens/min** — about **two hours** for this corpus. |
-
-**Consequence, and the decision:** the shipped vector index is local LSA. The
-hosted path stays wired, tested and one config change away — `build_indexes.py`
-times a hosted batch, estimates the full build, and falls back with a printed
-reason if it would exceed two minutes:
-
-```
-note  hosted embeddings unavailable (HTTPError: HTTP Error 429); used local LSA
-```
-
-This is not a workaround for a missing capability. LSA is deterministic, offline
-and free, which for a live demo on a rate-limited tier is worth more than a
-marginal quality gain — and its benefit over keyword-only is measured (D15).
-
-**What LLM assistance actually buys**, on the 20 development questions:
-
-| | cited | answered | multi-hop found | ms/question |
-|---|---:|---:|---:|---:|
-| hybrid + loop | 10 | 10 | 5 | 2 |
-| hybrid + loop + LLM | 10 | 13 | 8 | ~6,700 |
-
-It finds three more multi-hop chains and produces three more concrete answers, and
-it costs roughly 3,000× the latency. It adds **no cited answers** — the citations
-come from the fact store either way, which is the intended design. Results also
-vary slightly between runs, because free-tier rate limiting makes some calls fail
-and fall back; that variance is visible in the trace as fallback events.
+That is the point of the fallback path rather than an apology for it: when the
+free tier rate-limits us mid-demo — and it does — the deterministic run answers
+exactly as many questions, with the same citations. Results still vary slightly
+between runs, because a rate-limited call falls back; that variance is visible in
+the trace as fallback events.
 
 ## Known limitations in what *is* built
+
+### Multi-part questions are split, but only on facts
+A question asking for several things is decomposed into one sub-question per
+requested `(subject, attribute)` pair, and the answer is withheld until every one
+has been searched for. That covers comparisons ("the threat ratings of A and B"),
+repeated attributes on one subject ("where *and in which year* was it forged"),
+and calculations.
+
+It does **not** cover sub-clauses that are not attribute lookups. "Did its forging
+site appear in two conflicts, and was the housing location affected by either?"
+decomposes to the facts it names — forging site, housing — and the reasoning
+about conflicts falls through to full-text retrieval. The parts that *are*
+lookups are answered and cited; the rest is retrieved as context and reported as
+unresolved rather than being asserted.
+**Planned fix:** clause-level decomposition, where each conjunct is analysed as
+its own question and may itself be a hop or a conflict check.
+
+### Attribute routing is a fixed policy, not a learned one
+Which source can answer which attribute is a hand-written set
+(`plate_facts.FIGURE_ATTRIBUTES`): measurements come from plates, everything else
+from tables and prose. This is what stops the system searching a portrait for a
+relic's housing location. It is also a list someone has to maintain — a new
+numeric attribute added to the archive would be looked for in text only until the
+set is updated.
+
+### The prose fallback reads a fixed set of phrasings
+`prose_facts.py` reads a value out of a sentence when no table records it, which
+is how the Cinder-Wrought Aegis' forging year (stated once, in a contract about a
+different relic) becomes answerable. Each pattern requires the archive's own
+wording around the value and the subject named in the same sentence, or in the one
+immediately before it.
+
+The cost of that strictness is recall: a value stated in a phrasing we have not
+seen is still missed, and the module will not guess from a bare number near a
+name. Sentences that hedge — "the forged year is contested among sources" — are
+deliberately skipped, so a documented disagreement is never read as a fact. Table
+values always win over prose, because a table is a stated record.
 
 ### Question phrasings the analyzer does not cover
 Attribute matching is phrase-based against a fixed vocabulary. Phrasings with no

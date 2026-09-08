@@ -27,7 +27,11 @@ T = TypeVar("T")
 
 @dataclass
 class RetryPolicy:
-    attempts: int = 3
+    # Four attempts gives the 1s / 2s / 4s ladder before giving up. The circuit
+    # breaker below is what stops that becoming expensive: once a free tier is
+    # genuinely exhausted, three consecutive failures open the circuit and later
+    # calls skip the retries entirely rather than each paying seven seconds.
+    attempts: int = 4
     base_delay: float = 1.0
     max_delay: float = 8.0
     # Jitter stops several parallel calls retrying in lockstep after a 429.
