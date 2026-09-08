@@ -40,6 +40,29 @@ _CHART_LEGEND = re.compile(
 )
 
 
+# What a figure plate can actually answer. Plates in this archive carry exactly
+# one thing: a measured quantity about their subject. They never state where a
+# relic is housed, when it was forged, or what class it is — those live in the
+# codex tables and the wiki infoboxes.
+#
+# Routing on this rather than on "is there a plate for this entity" is what stops
+# the system searching an artifact's portrait for its housing location and then
+# reporting the answer as unavailable because the painting has no labels. A plate
+# exists for nearly every entity; that is not a reason to consult it.
+FIGURE_ATTRIBUTES = frozenset({
+    "threat_rating",
+    "attunement_cost",
+    "garrison_strength",
+    "recorded_casualties",
+    "shards_of_will",
+})
+
+
+def is_figure_attribute(attribute: str | None) -> bool:
+    """True when a figure plate is a plausible source for this attribute."""
+    return bool(attribute) and attribute in FIGURE_ATTRIBUTES
+
+
 def is_chart_plate(text: str) -> bool:
     """True when the plate draws its value on a scale rather than printing it."""
     return len(_CHART_LEGEND.findall(text)) >= 2

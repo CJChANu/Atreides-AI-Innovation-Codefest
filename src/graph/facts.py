@@ -30,12 +30,23 @@ from src.storage.db import ArchiveStore
 # a wiki infobox and a codex table are directly comparable.
 ATTRIBUTE_ALIASES = {
     "forged": "forging_date", "forging date": "forging_date", "forged in": "forging_date",
+    "forging": "forging_date", "forged year": "forging_date", "year forged": "forging_date",
     "forged at": "forging_site", "forging site": "forging_site", "place of forging": "forging_site",
     "founded": "founded", "founding date": "founded", "founding year": "founded",
-    "attunement cost": "attunement_cost",
+    "attunement cost": "attunement_cost", "cost": "attunement_cost",
     "threat rating": "threat_rating",
+    # The codex writes casualty counts three ways; the question vocabulary only
+    # ever asks for "recorded casualties", so the rest were unreachable.
+    "recorded casualties": "recorded_casualties", "casualties": "recorded_casualties",
+    "casualty figure": "recorded_casualties",
     "garrison strength": "garrison_strength", "garrison": "garrison_strength",
+    # Housing is stated six ways across the wiki and the two codexes. Every
+    # unaliased spelling is a fact the archive holds and we could not find: the
+    # Cinder-Wrought Aegis' housing sat under "place of housing" and a question
+    # asking where it is housed came back "not established".
     "current repository": "housed_in", "present housing": "housed_in", "housed in": "housed_in",
+    "place of housing": "housed_in", "current housing": "housed_in", "housing": "housed_in",
+    "repository": "housed_in",
     "artifact class": "artifact_class",
     "ruling power": "ruled_by", "ruled by": "ruled_by",
     "region": "region", "lair": "lair", "habit": "habit", "status": "status",
@@ -52,7 +63,10 @@ ATTRIBUTE_ALIASES = {
     "membership": "member_of", "member of": "member_of",
     "member": "has_member", "known members": "has_member", "members": "has_member",
     "victor of": "victor_of", "won": "victor_of",
-    "service": "serves_at", "place of service": "serves_at",
+    "service": "serves_at", "place of service": "serves_at", "current service": "serves_at",
+    # For a relic the archive treats "where it currently is" and "where it is
+    # housed" as the same row; it only ever uses this label on artifacts.
+    "current location": "housed_in",
     "lair region": "lair", "known lair-region": "lair",
     "primary domain": "primary_domain",
 }
