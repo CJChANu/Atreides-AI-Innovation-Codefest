@@ -22,23 +22,24 @@ conflicts. 50 tests passing.
 - **Ablation harness**: vector-only vs keyword-only vs hybrid vs hybrid+graph, so
   the fusion weights are evidence-backed rather than asserted
 
-## Phase 3 — The investigation loop (the 1C core)
+## Phase 3 — The investigation loop (the 1C core) ✅ complete
 
-- Query understanding → entities, intent, answer type, constraints
-- Decomposition into sub-questions with explicit completion conditions
-- Bounded state machine: search → extract → expand → check gaps → re-plan
-- Graph expansion from newly discovered entities (the 1B path)
-- Stopping policy with a named reason on every answer
-- Per-iteration trace persisted as JSON
+Query understanding, decomposition with completion conditions, the bounded state
+machine, graph/fact expansion from discovered entities, a named stop reason on
+every answer, and a JSON trace.
 
-## Phase 4 — Verification and grounded answers
+All seven 1B and both 1C development questions resolve with page citations. See
+`docs/investigation-protocol.md`.
 
-- Claim model: direct / inferred / conflicting / unsupported
-- Citation validation — a cited chunk must exist and match its claimed page
-- Reliability-aware confidence; conflicts reported, never silently resolved
-- Answer generator, HTTP API, and a UI that shows answer, evidence chain, graph
-  connections, conflicts and stop reason
-- Tables and figures embedded in answers as first-class evidence (the 1B/1A bonus)
+## Phase 4 — Verification and grounded answers ◐ mostly complete
+
+Done: the claim model (direct / inferred / conflicting / unsupported), bounded
+confidence scoring, reliability-aware conflict reporting, the grounded answer and
+trace renderer, and figure-plate evidence when a value exists only on an
+illustration.
+
+Remaining: the HTTP API and a web UI rendering the same payload the CLI prints,
+with the cited page image inline.
 
 ## Phase 5 — Hardening
 

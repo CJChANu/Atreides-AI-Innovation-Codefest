@@ -6,16 +6,36 @@ code against the real archive.
 
 ## What is not built yet
 
-Phase 1 is complete. The following are designed but **not implemented**, and the
-README does not claim otherwise:
+Phases 1–3 are complete. The following are designed but **not implemented**, and
+the README does not claim otherwise:
 
 - vector retrieval and the four-way score fusion (weights exist in config, unused)
-- query understanding and sub-question decomposition
-- the iterative investigation loop — the 1C core
-- claim classification, confidence scoring, grounded answer generation
-- the HTTP API and the user interface
+- the HTTP API and the web user interface
+- LLM relation extraction over novel prose
+
+## Where the loop currently fails
+
+Measured on the 20 development questions: **14 of 20** produce a cited answer.
+The 6 that do not are all the same failure, and it is an ingestion gap rather than
+a reasoning one — the value exists only on a chart plate (see below), or only in
+an illustration we cannot read (a banner emblem, an object held in a portrait).
+
+The loop correctly reports all six as PARTIAL with `INSUFFICIENT_EVIDENCE`, and
+for the plate cases it names the plate and explains that the value is drawn rather
+than printed. It does not guess.
 
 ## Known limitations in what *is* built
+
+## Known limitations in what *is* built
+
+### Question phrasings the analyzer does not cover
+Attribute matching is phrase-based against a fixed vocabulary. "What is the
+central emblem on the banner of House Morvain" resolves `emblem`, but the value
+lives in a heraldry image, not a table. Phrasings with no attribute phrase at all
+("what object are they holding") fall through to `open_question` and full-text
+search, which retrieves the right article but cannot extract a value from it.
+**Planned fix:** a vision-model pass over heraldry and portrait plates (Phase 2),
+plus LLM-assisted attribute matching as a *fallback* behind the rule-based path.
 
 ### Chart plates cannot be read
 Several figure plates draw their value as a bar against a labelled axis. OCR
@@ -59,6 +79,13 @@ would currently be missed.
 **Planned fix:** LLM relation extraction over chronicle prose, benchmarked against
 the deterministic baseline (Phase 3).
 
+### The loop cannot chain more than two hops
+Decomposition builds at most one bridge step. A three-hop question ("who leads the
+faction that rules the region containing X") would resolve two hops and then
+report the third as unsupported — correctly, but incompletely.
+**Planned fix:** recursive bridge steps bounded by `AEA_MAX_GRAPH_HOPS`, which is
+already in the configuration and currently unused by the loop.
+
 ### Conflict detection is exact-match after normalisation
 Two facts conflict when their normalised values differ. It therefore catches
 `391 AS` vs `Contested` and ignores `Contested` vs `contested`, but it would not
@@ -73,6 +100,28 @@ when a source uses a bare first name. A question about "Maelis" alone would
 retrieve all three without ranking between them.
 
 ## What we tried that did not work
+
+### Marking a sub-question satisfied because *something* was retrieved
+The loop originally satisfied a step whenever full-text search returned passages.
+That produced answers reading "Not established by the archive" directly above
+"all required sub-questions are supported" — a gap presented as confidence, which
+is the worst failure mode available to a system whose whole claim is groundedness.
+Sub-questions now separate `attempted` from `satisfied`; a step with no citable
+value fails, and the answer is labelled PARTIAL. Regression test:
+`test_an_unanswerable_question_is_not_reported_as_supported`.
+
+### Reading the hop direction out of the question's grammar
+Our first hop planner assumed the first relation mentioned was the first hop. That
+answers "the accord won by Ederon Fellgard's faction" correctly and "the faction
+that won the War of Drowned Light" backwards. Rather than add grammar rules, we
+ask the index which relation the named subject actually records. One rule, both
+phrasings.
+
+### Deriving the displayed answer from the rendered evidence chain
+A convenience that broke as soon as reverse lookup landed: in a forward lookup the
+answer is the fact's *value*, but in a reverse lookup it is the fact's *subject*.
+Parsing the last chain line gave the right string for one and the wrong one for
+the other. The answer is now set explicitly by whichever step produced it.
 
 ### Extracting tables before text on a PDF page
 Our first PDF parser emitted each page's tables and then its text. The codexes put

@@ -156,7 +156,87 @@ and is never presented as certainty.
 
 ---
 
-## D9 — Configuration in one place, secrets never in the repo
+## D9 — Rule-based query understanding, not an LLM call
+
+**Chosen:** parse the question by longest-matching against the 417 entities and
+the fixed attribute set we actually indexed.
+
+**Rejected:** an LLM structured-output call as the primary path.
+
+**Why:** the archive's vocabulary is invented and *closed*. "Vharencrag Fortress"
+is only recognisable because we indexed it — and a name we have not indexed is a
+name we could not have cited anyway. Matching against the index is therefore both
+more accurate than a general NER model and impossible to hallucinate with. It also
+runs with no API key, no network and no rate limit, which is what makes a live
+demonstration on a free tier safe.
+
+An LLM pass can refine the parse when a key is configured, but it may only fill
+gaps — it is not allowed to overrule an entity matched against the index.
+
+---
+
+## D10 — The loop decides hop direction from the data, not the grammar
+
+"The faction that won the War of Drowned Light" and "the accord won by Ederon
+Fellgard's faction" use the same two relations in opposite orders. Parsing that
+distinction from English is fragile.
+
+Instead we ask the index: whichever of the two relations the *named subject*
+actually records is the first hop. This is one rule that handles both phrasings
+and any future one, and it fails safely — if neither relation is recorded, the
+question is reported as unanswerable rather than answered from the wrong end.
+
+---
+
+## D11 — Three retrieval directions, ordered by citability
+
+A relationship is often recorded from one side only: a faction's wiki page may
+carry no "Victor of" row while every war's page names its victor. The fact is in
+the archive either way.
+
+The loop therefore tries, in order: the forward fact, the inverse relation, the
+reverse index (search from the other end), the graph, full text, then figure
+plates. The ordering is by **how well each result can be cited**, not by how
+likely each is to return something — a page-citable fact beats a plausible
+passage every time.
+
+---
+
+## D12 — A step that retrieves passages but no value has *failed*
+
+**The bug this fixes was ours.** An earlier version marked a sub-question
+satisfied when full-text search returned passages, on the reasoning that we had
+"found something". The result was answers reading:
+
+```
+ANSWER  Not established by the archive.
+STOPPED BECAUSE  all required sub-questions are supported
+```
+
+That is the single most damaging thing a system like this can do — it converts a
+gap into false confidence. Sub-questions now carry a separate `attempted` flag:
+a step that was investigated and produced no citable value is recorded as failed,
+the stop reason becomes `INSUFFICIENT_EVIDENCE`, and the answer is labelled
+PARTIAL. There is a regression test.
+
+---
+
+## D13 — Confidence is bounded by structure, not by judgement
+
+A single source is capped at 0.92 however authoritative it is — one record is one
+record. Corroboration counts only across *distinct documents*, so the same codex
+row appearing in two chunks is not two sources. Each hop costs 0.12, because each
+link is another chance to have followed the wrong one. An unresolved conflict is
+capped at 0.55.
+
+A conflict is only reported as *resolved* when the reliability gap between the
+competing sources is decisive (≥0.15). A codex against a ballad is settled; two
+wiki articles against each other is a genuine open question, and saying so is more
+useful than picking one.
+
+---
+
+## D14 — Configuration in one place, secrets never in the repo
 
 Fusion weights, chunk sizes and the investigation budget live in
 `src/common/config.py`, read from the environment. They are configuration, not
