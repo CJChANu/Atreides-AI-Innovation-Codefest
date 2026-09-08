@@ -47,7 +47,37 @@ ATTRIBUTE_PHRASES: dict[str, str] = {
     "doctrine": "doctrine", "emblem": "emblem", "banner": "emblem",
     "belligerent": "belligerent_in",
     "serves": "serves_at", "service": "serves_at",
+    # Phrasings the archive itself never uses, but a person naturally would.
+    # Every one of these was added because a real question missed without it.
+    "defenders": "garrison_strength", "defenders hold": "garrison_strength",
+    "troops": "garrison_strength", "soldiers": "garrison_strength",
+    "how many men": "garrison_strength", "strength of the garrison": "garrison_strength",
+    "came out on top": "victor", "prevailed": "victor", "triumphed": "victor",
+    "makes its home": "lair", "makes their home": "lair", "nests": "lair",
+    "dwells": "lair", "lives": "lair", "home of": "lair",
+    "begin": "began", "started": "began", "broke out": "began",
+    "end": "ended", "concluded": "ended", "finished": "ended",
+    "descent": "doctrine", "claims descent": "doctrine",
+    "sits": "seat", "based at": "seat", "headquarters": "seat",
 }
+
+# Two attributes describing the same event from different angles. When the
+# question word disagrees with the attribute a phrase matched — "*Where* was it
+# forged" matching `forging_date` — we swap to the sibling instead of answering
+# the wrong question confidently.
+ATTRIBUTE_SIBLINGS = {
+    "forging_date": "forging_site",
+    "forging_site": "forging_date",
+    "founded": "location",
+    "born": "birthplace",
+}
+
+# What each opening word expects the answer to *be*.
+PLACE_WORDS = re.compile(r"^\s*(where|in which (place|city|hold|keep|fortress|region))\b", re.I)
+TIME_WORDS = re.compile(r"^\s*(when|in (which|what) year|what year)\b", re.I)
+
+PLACE_ATTRS = {"forging_site", "seat", "lair", "housed_in", "region", "location", "serves_at"}
+TIME_ATTRS = {"forging_date", "founded", "born", "began", "ended", "birth"}
 
 # Words that signal the asker already suspects the sources disagree. These are the
 # 1C questions: "the *true* founding", "in which year was it *actually* forged".
@@ -60,7 +90,23 @@ CONFLICT_MARKERS = re.compile(
 # "the lair of X" then "who rules that", "the faction of which X is a member" then
 # "what did that faction win".
 BRIDGE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    # "the lair of X", but also "the place where X lairs" — the same hop phrased
+    # as a clause. The relation comes from the *verb* in the clause, never from
+    # the word "place": "the place where X lairs" and "the place where X is
+    # housed" are different hops, and collapsing them answers the wrong question.
     (re.compile(r"\blair\s+of\b", re.IGNORECASE), "lair"),
+    # A verb clause is only a *bridge* when it modifies a place noun — we want
+    # that place, then something about it. Without the head noun the same verb is
+    # the question's own relation: "which creature lairs in Y" asks for the
+    # creature, not for a hop, and treating it as one answers the wrong thing.
+    (re.compile(r"\b(place|site|region|territory|land|hold|seat)\s+(where|in which)\b"
+                r"[^?]{0,70}?\b(lairs|dwells|nests|makes (its|their) home)\b", re.IGNORECASE), "lair"),
+    (re.compile(r"\b(place|site|hold|vault)\s+(where|in which)\b[^?]{0,70}?"
+                r"\b(housed|kept|held|stored)\b", re.IGNORECASE), "housed_in"),
+    (re.compile(r"\b(place|site|hold)\s+(where|in which)\b[^?]{0,70}?"
+                r"\b(seated|based)\b", re.IGNORECASE), "seat"),
+    (re.compile(r"\b(place|site|forge)\s+(where|in which)\b[^?]{0,70}?"
+                r"\bforged\b", re.IGNORECASE), "forging_site"),
     (re.compile(r"\bfaction\s+of\s+which\b|\bfaction\s+that\b|\bfaction\b", re.IGNORECASE), "member_of"),
     (re.compile(r"\borganization\s+that\b|\borganisation\s+that\b", re.IGNORECASE), "member_of"),
     (re.compile(r"\bseat\s+of\b", re.IGNORECASE), "seat"),
@@ -90,12 +136,25 @@ class QuestionAnalyzer:
             if surface in ATTRIBUTE_PHRASES:
                 continue
             self._by_surface.setdefault(surface, (row["entity_id"], row["name"]))
+        # Attributes the fact store actually holds. This is what an LLM-proposed
+        # relation is checked against, so the archive — not a hardcoded list —
+        # decides what counts as a real relation.
+        self.known_attributes = {
+            row["attribute"] for row in
+            store.connection.execute("SELECT DISTINCT attribute FROM facts")
+        }
         subjects = store.connection.execute(
             "SELECT DISTINCT subject_id, subject_name FROM facts"
         ).fetchall()
         for row in subjects:
-            self._by_surface.setdefault(row["subject_name"].lower(),
-                                        (row["subject_id"], row["subject_name"]))
+            surface = row["subject_name"].lower()
+            # Same guard as above, and it matters more here: a codex table whose
+            # heading was mis-parsed can leave a *subject* called "Region", which
+            # then matches the word "region" in "Which region contains…" and
+            # shadows the entity the question is actually about.
+            if surface in ATTRIBUTE_PHRASES:
+                continue
+            self._by_surface.setdefault(surface, (row["subject_id"], row["subject_name"]))
         # Longest surfaces first: "Greyfell Citadel" must beat "Greyfell".
         self._surfaces = sorted(self._by_surface, key=len, reverse=True)
 
@@ -141,7 +200,21 @@ class QuestionAnalyzer:
                 continue
             if best is None or len(phrase) > best[0]:
                 best = (len(phrase), attribute)
-        return best[1] if best else None
+        if best is None:
+            return None
+
+        attribute = best[1]
+        # "Where was the Gauntlet forged?" matches the phrase "forged", which maps
+        # to the *date*. The opening word says the asker wants a place, so prefer
+        # the sibling. Answering the wrong question confidently is worse than
+        # answering none.
+        sibling = ATTRIBUTE_SIBLINGS.get(attribute)
+        if sibling:
+            if PLACE_WORDS.match(text) and attribute in TIME_ATTRS and sibling in PLACE_ATTRS:
+                return sibling
+            if TIME_WORDS.match(text) and attribute in PLACE_ATTRS and sibling in TIME_ATTRS:
+                return sibling
+        return attribute
 
     @staticmethod
     def match_bridge(text: str) -> str | None:

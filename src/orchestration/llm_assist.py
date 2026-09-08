@@ -17,6 +17,7 @@ trusted to a prompt.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from src.orchestration.state import Intent, Question
@@ -67,8 +68,20 @@ def merge_understanding(question: Question, llm: dict | None, analyzer) -> Assis
                 outcome.used = True
                 outcome.notes.append(f"LLM surfaced entity '{name}' (confirmed in index)")
 
-    # Attribute: only when the rules found none.
-    relations = llm.get("relations", [])
+    # Attribute: only when the rules found none. Candidate relations the schema
+    # quarantined get one chance to resolve against attributes the archive
+    # actually records — the same rule as entities: the model may propose, the
+    # index decides. A name the fact store has never seen stays quarantined.
+    relations = list(llm.get("relations", []))
+    unresolved: list[str] = []
+    for candidate in llm.get("candidate_relations", []):
+        resolved = resolve_attribute(candidate, analyzer)
+        if resolved and resolved not in relations:
+            relations.append(resolved)
+            outcome.notes.append(
+                f"LLM proposed '{candidate}' → resolved to recorded attribute '{resolved}'")
+        else:
+            unresolved.append(candidate)
     if question.attribute is None and relations:
         question.attribute = relations[0]
         outcome.used = True
@@ -98,12 +111,37 @@ def merge_understanding(question: Question, llm: dict | None, analyzer) -> Assis
             outcome.used = True
             outcome.notes.append(f"LLM reclassified the question as {mapped.value}")
 
-    if llm.get("candidate_relations"):
+    if unresolved:
         outcome.notes.append(
-            "LLM proposed unsupported relations "
-            f"{llm['candidate_relations']} — quarantined, not traversed"
+            f"LLM proposed unrecognised relations {unresolved} — "
+            f"quarantined, not traversed"
         )
     return outcome
+
+
+def resolve_attribute(candidate: str, analyzer) -> str | None:
+    """Map a model-proposed relation onto an attribute the archive records.
+
+    Three passes, narrowing from safest to loosest: the phrase vocabulary we
+    already trust, then an exact attribute name, then a snake_case match against
+    what the fact store actually contains. Anything that survives none of these
+    is a name the archive has never used, so it is not accepted.
+    """
+    from src.orchestration.understanding import ATTRIBUTE_PHRASES
+
+    cleaned = candidate.strip().lower().replace("-", " ")
+    if cleaned in ATTRIBUTE_PHRASES:
+        return ATTRIBUTE_PHRASES[cleaned]
+
+    known = getattr(analyzer, "known_attributes", set())
+    snake = re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")
+    if snake in known:
+        return snake
+    # A model saying "defenders" for a corpus that records "garrison_strength".
+    for attribute in known:
+        if snake and (attribute.startswith(snake) or snake in attribute.split("_")):
+            return attribute
+    return None
 
 
 def verify_extracted_claims(claims: list[dict], allowed_evidence: dict[str, str]) -> tuple[list[dict], list[str]]:
