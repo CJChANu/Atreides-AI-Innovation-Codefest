@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 
 from src.graph.entities import normalise
-from src.orchestration.state import Intent, Question
+from src.orchestration.state import Calculation, Intent, Operand, Question
 from src.storage.db import ArchiveStore
 
 # Phrases that name an attribute in the fact store. Ordered longest-first at match
@@ -119,6 +119,33 @@ FILTER_WORDS = {"accord", "war", "purge", "reckoning", "siege", "battle", "treat
 _QUESTION_HEAD = re.compile(r"^(which|what|who|whose|where|when|how many|how much|in which|state)\b",
                             re.IGNORECASE)
 
+# Attributes whose values are numbers. A calculation can only be built over
+# these, which is also what stops "what percentage of the wars did X win" from
+# being parsed as arithmetic over two names.
+NUMERIC_ATTRIBUTES = {
+    "threat_rating", "attunement_cost", "garrison_strength", "recorded_casualties",
+    "shards_of_will",
+}
+
+# Question shapes that ask for arithmetic rather than a lookup. Each maps to the
+# formula kind; the operand *order* is worked out separately, because "what
+# percentage of A is B" and "B as a percentage of A" put the same operand in the
+# denominator despite naming them in opposite orders.
+CALCULATION_MARKERS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bwhat\s+percent(age)?\b|\bas\s+a\s+percent(age)?\s+of\b|"
+                r"\bpercent(age)?\s+of\b", re.IGNORECASE), "percentage"),
+    (re.compile(r"\bratio\s+of\b|\bhow\s+many\s+times\b|\btimes\s+(larger|greater|"
+                r"bigger|smaller|as\s+many|as\s+large)\b", re.IGNORECASE), "ratio"),
+    (re.compile(r"\bdifference\s+between\b|\bhow\s+much\s+(larger|greater|smaller|"
+                r"more|less)\b|\bhow\s+many\s+(more|fewer|less)\b", re.IGNORECASE), "difference"),
+    (re.compile(r"\bcombined\b|\btotal\s+of\b|\bsum\s+of\b|\btogether\b|"
+                r"\badded\s+together\b", re.IGNORECASE), "total"),
+    (re.compile(r"\baverage\b|\bmean\s+of\b", re.IGNORECASE), "average"),
+]
+
+# The word that introduces the denominator in a percentage or ratio question.
+_DENOMINATOR_CUE = re.compile(r"\bpercent(?:age)?\s+of\b|\bratio\s+of\b|\bof\b", re.IGNORECASE)
+
 
 class QuestionAnalyzer:
     def __init__(self, store: ArchiveStore) -> None:
@@ -160,6 +187,35 @@ class QuestionAnalyzer:
 
     # -- entity matching ----------------------------------------------------
 
+    def locate_entities(self, text: str) -> list[tuple[tuple[str, str], int, int]]:
+        """Every known entity in the text, as ``(entity, start, end)``.
+
+        Same longest-match-wins scan as `match_entities`, but it keeps the spans.
+        A question that names two subjects needs to know *where* each one sits in
+        order to work out which attribute belongs to which — "Embermarch's
+        garrison strength" and "the Aegis' attunement cost" are only separable by
+        position.
+        """
+        lowered = text.lower()
+        consumed = [False] * len(lowered)
+        found: list[tuple[tuple[str, str], int, int]] = []
+
+        for surface in self._surfaces:
+            start = lowered.find(surface)
+            while start >= 0:
+                end = start + len(surface)
+                before_ok = start == 0 or not lowered[start - 1].isalnum()
+                after_ok = end >= len(lowered) or not lowered[end].isalnum()
+                if before_ok and after_ok and not any(consumed[start:end]):
+                    for index in range(start, end):
+                        consumed[index] = True
+                    found.append((self._by_surface[surface], start, end))
+                    break
+                start = lowered.find(surface, start + 1)
+
+        found.sort(key=lambda item: item[1])
+        return found
+
     def match_entities(self, text: str) -> list[tuple[str, str]]:
         """Longest-match known entity names against the question text.
 
@@ -168,26 +224,35 @@ class QuestionAnalyzer:
         recognisable because we have it, and a name we do not have is a name we
         could not have cited anyway.
         """
+        return [entity for entity, _, _ in self.locate_entities(text)]
+
+    def locate_attributes(self, text: str) -> list[tuple[str, int, int]]:
+        """Every attribute phrase in the text, as ``(attribute, start, end)``.
+
+        `match_attribute` answers "what is this question about"; this answers
+        "what does it mention", which is what a two-operand question needs. Longer
+        phrases win over shorter ones covering the same span, and each attribute
+        is reported once per position rather than once overall.
+        """
         lowered = text.lower()
         consumed = [False] * len(lowered)
-        found: list[tuple[str, str]] = []
+        found: list[tuple[str, int, int]] = []
 
-        for surface in self._surfaces:
-            start = lowered.find(surface)
+        for phrase in sorted(ATTRIBUTE_PHRASES, key=len, reverse=True):
+            attribute = ATTRIBUTE_PHRASES[phrase]
+            start = lowered.find(phrase)
             while start >= 0:
-                end = start + len(surface)
-                # Whole-token match only, and not inside an already-claimed span.
+                end = start + len(phrase)
                 before_ok = start == 0 or not lowered[start - 1].isalnum()
                 after_ok = end >= len(lowered) or not lowered[end].isalnum()
                 if before_ok and after_ok and not any(consumed[start:end]):
                     for index in range(start, end):
                         consumed[index] = True
-                    found.append((self._by_surface[surface], start))
-                    break
-                start = lowered.find(surface, start + 1)
+                    found.append((attribute, start, end))
+                start = lowered.find(phrase, end if after_ok else start + 1)
 
         found.sort(key=lambda item: item[1])
-        return [entity for entity, _ in found]
+        return found
 
     # -- attribute matching -------------------------------------------------
 
@@ -216,6 +281,99 @@ class QuestionAnalyzer:
                 return sibling
         return attribute
 
+    # -- calculations -------------------------------------------------------
+
+    @staticmethod
+    def match_calculation(text: str) -> str | None:
+        """The kind of arithmetic the question asks for, if any."""
+        for pattern, kind in CALCULATION_MARKERS:
+            if pattern.search(text):
+                return kind
+        return None
+
+    def build_operands(self, text: str) -> list[Operand]:
+        """Pair every numeric attribute in the question with its own subject.
+
+        The pairing is positional: an attribute belongs to the nearest entity
+        *before* it ("Embermarch's garrison strength"), falling back to the
+        nearest one after ("the garrison strength of Embermarch"). Attributes
+        that no entity can be attached to are dropped rather than guessed at —
+        an operand without a subject cannot be looked up, and inventing one is
+        exactly the failure this whole path exists to prevent.
+        """
+        entities = self.locate_entities(text)
+        if not entities:
+            return []
+
+        operands: list[Operand] = []
+        seen: set[tuple[str, str]] = set()
+        for attribute, start, end in self.locate_attributes(text):
+            if attribute not in NUMERIC_ATTRIBUTES:
+                continue
+            before = [item for item in entities if item[2] <= start]
+            after = [item for item in entities if item[1] >= end]
+            chosen = before[-1] if before else (after[0] if after else None)
+            if chosen is None:
+                continue
+            (subject_id, name), _, _ = chosen
+            if (subject_id, attribute) in seen:
+                continue
+            seen.add((subject_id, attribute))
+            operands.append(Operand(subject_id=subject_id, subject_name=name,
+                                    attribute=attribute))
+
+        # "the difference between the garrison strength of Marrowwatch and
+        # Thorncairn" names the attribute once and the subjects twice. The
+        # positional pass can only attach it to one of them, so when a single
+        # numeric attribute is shared across several named subjects, read it as
+        # applying to each — that is what the sentence means.
+        numeric = {attribute for attribute, _, _ in self.locate_attributes(text)
+                   if attribute in NUMERIC_ATTRIBUTES}
+        if len(operands) < 2 and len(numeric) == 1 and len(entities) >= 2:
+            shared = next(iter(numeric))
+            operands = [
+                Operand(subject_id=subject_id, subject_name=name, attribute=shared)
+                for (subject_id, name), _, _ in entities
+            ]
+        return operands
+
+    @staticmethod
+    def order_calculation(kind: str, text: str, operands: list[Operand],
+                          spans: list[tuple[str, int, int]]) -> Calculation:
+        """Decide which operand is the numerator and which the denominator.
+
+        Both "what percentage of A is B" and "B as a percentage of A" mean
+        B ÷ A: in each the denominator is the operand named after the word "of".
+        Reading the cue word rather than the surface order is what keeps the two
+        phrasings from producing reciprocal answers.
+        """
+        calculation = Calculation(kind=kind)
+        if not calculation.is_pairwise or len(operands) < 2:
+            return calculation
+
+        # When both operands carry the *same* attribute the cue word cannot tell
+        # them apart ("the ratio of the threat rating of A to that of B" puts
+        # "of" before both). Source order is the reading a person would take.
+        if len({operand.attribute for operand in operands}) < 2:
+            return calculation
+
+        cue = _DENOMINATOR_CUE.search(text)
+        if cue is None:
+            return calculation
+
+        # Which attribute phrase is the first one after the cue word?
+        following = [span for span in spans
+                     if span[1] >= cue.end() and span[0] in NUMERIC_ATTRIBUTES]
+        if not following:
+            return calculation
+        denominator_attribute = following[0][0]
+        for index, operand in enumerate(operands):
+            if operand.attribute == denominator_attribute:
+                calculation.denominator = index
+                calculation.numerator = 1 - index if len(operands) == 2 else 0
+                break
+        return calculation
+
     @staticmethod
     def match_bridge(text: str) -> str | None:
         for pattern, attribute in BRIDGE_PATTERNS:
@@ -230,6 +388,35 @@ class QuestionAnalyzer:
         bridge = self.match_bridge(text)
         attribute = self.match_attribute(text, exclude=bridge)
         expects_conflict = bool(CONFLICT_MARKERS.search(text))
+
+        # A calculation question is the one case where a single attribute slot is
+        # not enough: it needs a value for *each* named subject, and answering it
+        # from whichever one the rules happened to match first is how a system
+        # ends up ignoring half the question.
+        calculation_kind = self.match_calculation(text)
+        operands: list[Operand] = []
+        calculation: Calculation | None = None
+        if calculation_kind:
+            # Every supported formula needs at least two numbers, pairwise or not.
+            operands = self.build_operands(text)
+            if len(operands) >= 2:
+                calculation = self.order_calculation(
+                    calculation_kind, text, operands, self.locate_attributes(text)
+                )
+            else:
+                # Not enough grounded operands to compute anything. Fall through
+                # to the ordinary lookup path rather than promising arithmetic we
+                # cannot perform.
+                operands = []
+
+        if calculation is not None:
+            return Question(
+                text=text, intent=Intent.CALCULATION, entities=entities,
+                attribute=attribute, bridge_attribute=None, answer_type="number",
+                expects_conflict=expects_conflict,
+                filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
+                operands=operands, calculation=calculation,
+            )
 
         if bridge and attribute and attribute != bridge:
             intent = Intent.RELATION_HOP

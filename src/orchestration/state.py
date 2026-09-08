@@ -21,6 +21,7 @@ class Intent(str, Enum):
     CONFLICT_RESOLUTION = "conflict_resolution"  # "in which year was X *actually* forged"
     RELATION_HOP = "relation_hop"                # "who rules the lair of X"
     INVERSE_HOP = "inverse_hop"                  # "which faction has X as a member"
+    CALCULATION = "calculation"                  # "what percentage of X's a is Y's b"
     OPEN_QUESTION = "open_question"              # anything else; falls back to text search
 
 
@@ -132,6 +133,78 @@ class Claim:
 
 
 @dataclass
+class Operand:
+    """One (subject, attribute) pair a question needs a *number* for.
+
+    A calculation question names two of these and is answerable only when both
+    are grounded. Keeping them as first-class objects — rather than reusing the
+    single `attribute` slot — is what lets the loop notice that it has one value
+    and not the other, instead of quietly answering with the half it found.
+    """
+
+    subject_id: str
+    subject_name: str
+    attribute: str
+    # Filled in once the fact store yields a value for this pair.
+    value: float | None = None
+    value_text: str = ""
+    evidence: list[FactRow] = field(default_factory=list)
+    note: str = ""
+
+    @property
+    def grounded(self) -> bool:
+        return self.value is not None
+
+    def describe(self) -> str:
+        return f"{self.subject_name}'s {self.attribute.replace('_', ' ')}"
+
+
+@dataclass
+class Calculation:
+    """What arithmetic the question asks for, and over which operands.
+
+    `kind` names the formula; `numerator` and `denominator` index into the
+    question's operand list for the two-operand forms, while `total` and
+    `average` simply use every operand.
+    """
+
+    kind: str                       # percentage | ratio | difference | total | average
+    numerator: int = 0
+    denominator: int = 1
+
+    @property
+    def is_pairwise(self) -> bool:
+        return self.kind in {"percentage", "ratio", "difference"}
+
+    def formula(self, operands: list[Operand]) -> str:
+        """The arithmetic written out, for the trace."""
+        names = [operand.describe() for operand in operands]
+        if self.kind == "percentage":
+            return f"({names[self.numerator]} ÷ {names[self.denominator]}) × 100"
+        if self.kind == "ratio":
+            return f"{names[self.numerator]} ÷ {names[self.denominator]}"
+        if self.kind == "difference":
+            return f"{names[self.numerator]} − {names[self.denominator]}"
+        if self.kind == "average":
+            return f"mean of {', '.join(names)}"
+        return " + ".join(names)
+
+    def apply(self, values: list[float]) -> float | None:
+        try:
+            if self.kind == "percentage":
+                return values[self.numerator] / values[self.denominator] * 100.0
+            if self.kind == "ratio":
+                return values[self.numerator] / values[self.denominator]
+            if self.kind == "difference":
+                return values[self.numerator] - values[self.denominator]
+            if self.kind == "average":
+                return sum(values) / len(values)
+            return sum(values)
+        except (IndexError, ZeroDivisionError):
+            return None
+
+
+@dataclass
 class Question:
     """The structured form of the user's question."""
 
@@ -143,10 +216,17 @@ class Question:
     answer_type: str = "value"
     expects_conflict: bool = False
     filter_terms: list[str] = field(default_factory=list)
+    # Set only for Intent.CALCULATION.
+    operands: list[Operand] = field(default_factory=list)
+    calculation: Calculation | None = None
 
     @property
     def primary(self) -> tuple[str, str] | None:
         return self.entities[0] if self.entities else None
+
+    @property
+    def ungrounded_operands(self) -> list[Operand]:
+        return [operand for operand in self.operands if not operand.grounded]
 
 
 @dataclass
@@ -163,6 +243,10 @@ class Investigation:
     # with the fact's value; a reverse lookup answers with its subject. Recording
     # it explicitly beats re-deriving it from the rendered evidence chain.
     answer_value: str = ""
+    # For a calculation: the formula, the operands it consumed, and the result.
+    # Recorded rather than re-derived so the arithmetic in the answer and the
+    # arithmetic in the trace cannot disagree.
+    computation: dict[str, Any] = field(default_factory=dict)
     # Which mode actually ran, and what the LLM contributed. Both surface in the
     # trace so a viewer can tell an LLM-assisted run from a deterministic one.
     ai_mode: str = "deterministic"
@@ -195,6 +279,7 @@ class Investigation:
             "claims": [c.to_dict(title_of) for c in self.claims],
             "evidence_chain": self.evidence_chain,
             "conflicts": self.conflicts,
+            "calculation": self.computation,
             "investigation": {
                 "iterations": len(self.iterations),
                 "queries": self.queries_issued,

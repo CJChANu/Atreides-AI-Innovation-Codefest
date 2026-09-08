@@ -77,6 +77,22 @@ def _is_non_value(value: str) -> bool:
     return any(marker in lowered for marker in NOT_RECORDED)
 
 
+def _format_result(kind: str, result: float) -> str:
+    """Render a computed number at a precision the inputs actually justify.
+
+    The operands are whole numbers read off tables and plates, so a percentage
+    is quoted to two decimals and a count to none. Printing more digits than the
+    inputs support would dress an estimate up as a measurement.
+    """
+    if kind == "percentage":
+        return f"{result:.2f}%"
+    if kind == "ratio":
+        return f"{result:.3f}".rstrip("0").rstrip(".")
+    if abs(result - round(result)) < 1e-9:
+        return f"{round(result):,}"
+    return f"{result:,.2f}"
+
+
 class Investigator:
     def __init__(self, store: ArchiveStore, budget: InvestigationBudget, *,
                  gateway=None, retriever: HybridRetriever | None = None) -> None:
@@ -152,6 +168,13 @@ class Investigator:
                 state.stop_reason = StopReason.ALL_SUPPORTED
                 break
 
+            # A conflict step reads values the loop has already gathered; it
+            # issues no query. When nothing competes there is nothing for it to
+            # do, and spending an iteration and a query on it both pads the trace
+            # and eats budget that a later step may need. Settle it in place.
+            if self._settle_trivial_conflict(action, pending[0], learned):
+                continue
+
             iteration = Iteration(number=len(state.iterations) + 1,
                                   sub_question=pending[0].text, action=action,
                                   query=query, reason=reason)
@@ -175,6 +198,28 @@ class Investigator:
                 break
 
         return self._finish(state, started)
+
+    @staticmethod
+    def _settle_trivial_conflict(action: str, step: SubQuestion, learned: dict) -> bool:
+        """Close a conflict step that has nothing to compare, without a query.
+
+        Returns True when the step was settled here. The sub-question is still
+        marked and still carries a note, so the trace records that the check
+        happened and what it found — it just does not consume an iteration to
+        re-read values already in hand.
+        """
+        if action not in {"conflict_check", "resolve_conflict"}:
+            return False
+        views: list[AttributeView] = learned.get("views", [])
+        if any(view.is_conflicting for view in views):
+            return False
+
+        if action == "conflict_check":
+            step.satisfy([], "no competing values recorded for any value read"
+                             if views else "no values were read, so nothing could conflict")
+        else:
+            step.fail("only one value was recorded, so there is nothing to rank")
+        return True
 
     def _orient_hop(self, question: Question) -> None:
         """Decide which of the two relations in a hop question comes first.
@@ -204,12 +249,153 @@ class Investigator:
         handler = {
             "fact_scan": self._act_fact_scan,
             "fact_lookup": self._act_fact_lookup,
+            "operand_lookup": self._act_operand_lookup,
+            "compute": self._act_compute,
+            "report_gap": self._act_report_gap,
             "inverse_lookup": self._act_inverse_lookup,
             "conflict_check": self._act_conflict_check,
             "resolve_conflict": self._act_resolve_conflict,
             "text_search": self._act_text_search,
         }.get(action, self._act_text_search)
         return handler(question, step, state, iteration, learned)
+
+    def _act_operand_lookup(self, question, step, state, iteration, learned) -> bool:
+        """Read one operand of a calculation, and record whether it is grounded.
+
+        Deliberately strict: a calculation needs a *number*, so a value that is
+        present but not numeric ("None recorded") leaves the operand ungrounded
+        rather than being carried into the arithmetic.
+        """
+        index = int(step.key.split(":", 1)[1])
+        operand = question.operands[index]
+        iteration.retrieval_modes = ["facts"]
+
+        view = self.facts.lookup(operand.subject_id, operand.attribute)
+        if view is None:
+            # No plate fallback here on purpose. Values printed or drawn on
+            # plates are already lifted into the fact store at build time, and a
+            # step that "succeeded" by naming a plate it could not read would
+            # leave the operand ungrounded while looking satisfied — exactly the
+            # confusion the operand split exists to remove.
+            operand.note = f"no {operand.attribute.replace('_', ' ')} recorded"
+            step.fail(operand.note)
+            iteration.new_claims = [f"{operand.describe()}: nothing recorded"]
+            return False
+
+        _, rows = view.best()
+        display = rows[0].value_text
+        number = next((row.value_number for row in rows if row.value_number is not None), None)
+        if number is None or _is_non_value(display):
+            operand.note = (f"the archive records '{display}' for "
+                            f"{operand.attribute.replace('_', ' ')}, which is not a number")
+            step.fail(operand.note)
+            iteration.new_claims = [f"{operand.describe()}: '{display}' is not numeric"]
+            return False
+
+        operand.value = number
+        operand.value_text = display
+        operand.evidence = rows
+        learned.setdefault("views", []).append(view)
+        iteration.new_claims = [f"{operand.describe()} = {display}"]
+        state.evidence_chain.append(f"{operand.subject_name} — "
+                                    f"{operand.attribute.replace('_', ' ')}: {display}")
+        step.satisfy(rows, f"{operand.attribute} = {display}")
+        return True
+
+    def _act_compute(self, question, step, state, iteration, learned) -> bool:
+        """Perform the arithmetic, once every operand is grounded."""
+        calculation = question.calculation
+        if calculation is None:
+            step.fail("no calculation to perform")
+            return False
+
+        iteration.retrieval_modes = ["arithmetic"]
+        values = [operand.value for operand in question.operands]
+        if any(value is None for value in values):
+            return self._act_report_gap(question, step, state, iteration, learned)
+
+        result = calculation.apply([value for value in values if value is not None])
+        if result is None:
+            step.fail("the operands do not support this calculation "
+                      "(a denominator of zero, or a missing term)")
+            return False
+
+        formula = calculation.formula(question.operands)
+        substituted = " ".join(
+            f"{operand.subject_name} {operand.attribute.replace('_', ' ')} = {operand.value_text}"
+            for operand in question.operands
+        )
+        rendered = _format_result(calculation.kind, result)
+
+        # "The difference between A and B" asks how far apart they are, not which
+        # way round they were named. Reporting a bare negative number answers a
+        # question nobody asked, so quote the magnitude and say which is larger.
+        if calculation.kind == "difference" and result < 0:
+            larger = question.operands[calculation.denominator]
+            smaller = question.operands[calculation.numerator]
+            rendered = (f"{_format_result(calculation.kind, abs(result))} "
+                        f"({larger.subject_name} is the larger)")
+            formula = (f"{larger.describe()} − {smaller.describe()}")
+        state.answer_value = rendered
+        state.computation = {
+            "kind": calculation.kind,
+            "formula": formula,
+            "operands": [
+                {"subject": operand.subject_name, "attribute": operand.attribute,
+                 "value": operand.value, "value_text": operand.value_text,
+                 "citations": [row.citation(self.facts.title_of(row.document_id))
+                               for row in operand.evidence[:2]]}
+                for operand in question.operands
+            ],
+            "result": result,
+            "result_text": rendered,
+        }
+        iteration.new_claims = [f"{formula} = {rendered}", substituted]
+        state.evidence_chain.append(f"Computed: {formula} = {rendered}")
+        step.satisfy([row for operand in question.operands for row in operand.evidence],
+                     f"{formula} = {rendered}")
+        return True
+
+    def _act_report_gap(self, question, step, state, iteration, learned) -> bool:
+        """Refuse the calculation, naming exactly which operand is missing.
+
+        This is the difference between a wrong answer and a useful one. The
+        question named two quantities; if the archive only holds one, saying so —
+        and saying which — is the honest result, and the value we *did* find is
+        still worth reporting as context.
+        """
+        iteration.retrieval_modes = ["facts"]
+        missing = question.ungrounded_operands
+        found = [operand for operand in question.operands if operand.grounded]
+
+        names = ", ".join(operand.describe() for operand in missing)
+        detail = "; ".join(operand.note for operand in missing if operand.note)
+        held = "; ".join(f"{operand.describe()} = {operand.value_text}" for operand in found)
+
+        state.answer_value = (
+            f"Not established. This asks for "
+            f"{question.calculation.formula(question.operands) if question.calculation else 'a calculation'}"
+            f", but the archive records no value for {names}"
+            + (f" ({detail})" if detail else "")
+            + (f". It does record {held}." if held else ".")
+        )
+        state.computation = {
+            "kind": question.calculation.kind if question.calculation else "",
+            "formula": question.calculation.formula(question.operands)
+                       if question.calculation else "",
+            "operands": [
+                {"subject": operand.subject_name, "attribute": operand.attribute,
+                 "value": operand.value, "value_text": operand.value_text,
+                 "grounded": operand.grounded, "note": operand.note}
+                for operand in question.operands
+            ],
+            "result": None,
+            "result_text": "not established",
+        }
+        iteration.new_claims = [f"calculation refused: no value for {names}"]
+        state.evidence_chain.append(f"Calculation not possible: {names} is not recorded")
+        step.fail(f"missing operand: {names}")
+        return False
 
     def _act_fact_scan(self, question, step, state, iteration, learned) -> bool:
         """Establish that the subject exists and see what is recorded about it."""

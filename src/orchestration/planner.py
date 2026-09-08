@@ -36,6 +36,30 @@ def decompose(question: Question) -> list[SubQuestion]:
                         "every step checked for competing values"),
         ]
 
+    if question.intent is Intent.CALCULATION and question.calculation:
+        # One sub-question per operand, each with its own completion condition.
+        # This is the structural fix for answering arithmetic with half the
+        # inputs: "compute" cannot be reached until every operand is grounded,
+        # so a missing value stops the answer instead of being skipped over.
+        subs = [
+            SubQuestion(f"operand:{index}",
+                        f"What {operand.attribute.replace('_', ' ')} is recorded "
+                        f"for {operand.subject_name}?",
+                        f"a numeric value for {operand.attribute.replace('_', ' ')} "
+                        f"on {operand.subject_name}, with a citation")
+            for index, operand in enumerate(question.operands)
+        ]
+        subs.append(SubQuestion(
+            "compute",
+            f"What is {question.calculation.formula(question.operands)}?",
+            "every operand grounded in evidence, and the arithmetic performed",
+        ))
+        subs.append(SubQuestion(
+            "conflict", "Do sources disagree about any operand?",
+            "competing values checked for each operand",
+        ))
+        return subs
+
     if question.intent is Intent.INVERSE_HOP:
         target = question.attribute or "attribute"
         return [
@@ -85,6 +109,24 @@ def next_action(question: Question, pending: list[SubQuestion], learned: dict) -
     step = pending[0]
     primary = question.primary
     name = primary[1] if primary else question.text
+
+    if step.key.startswith("operand:"):
+        index = int(step.key.split(":", 1)[1])
+        operand = question.operands[index]
+        attribute = operand.attribute.replace("_", " ")
+        return ("operand_lookup", f"{operand.subject_name} {attribute}",
+                f"the calculation needs {operand.subject_name}'s {attribute}; "
+                f"read it before any arithmetic is attempted")
+
+    if step.key == "compute":
+        missing = question.ungrounded_operands
+        if missing:
+            return ("report_gap", missing[0].describe(),
+                    f"the calculation cannot proceed: no value was found for "
+                    f"{missing[0].describe()}")
+        return ("compute", question.calculation.formula(question.operands) if
+                question.calculation else "", "every operand is grounded, so the "
+                "arithmetic can be performed and shown")
 
     if step.key == "locate":
         return "fact_scan", name, f"establish what the archive records about {name}"

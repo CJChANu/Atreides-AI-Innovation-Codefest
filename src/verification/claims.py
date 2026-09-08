@@ -58,6 +58,22 @@ def build_claims(state: Investigation, facts) -> list[Claim]:
         if view:
             views.append(view)
 
+        # A computed value is never *stated* by a source: it is derived from two
+        # that are. Typing it as inferred — and charging it the same hop penalty
+        # as a bridged lookup — keeps the answer from presenting arithmetic with
+        # more authority than the numbers it rests on.
+        if step.key == "compute" and state.computation.get("result") is not None:
+            conflicting = _is_conflicting(state, rows)
+            claims.append(Claim(
+                text=f"{state.computation['formula']} = "
+                     f"{state.computation['result_text']}.",
+                claim_type=ClaimType.CONFLICTING if conflicting else ClaimType.INFERRED,
+                confidence=score(rows, hops=1, conflicting=conflicting),
+                evidence=rows,
+                step_key=step.key,
+            ))
+            continue
+
         # A target reached through a bridge is inferred, not directly stated:
         # no single source says "the Gravemaw Wyrm's lair is ruled by X".
         hops = 1 if (step.key == "target" and question.intent is Intent.RELATION_HOP) else 0
