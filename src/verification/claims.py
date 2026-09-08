@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from src.graph.fact_query import AttributeView, FactRow
 from src.orchestration.state import Claim, ClaimType, Intent, Investigation
+from src.verification.excerpts import attach_excerpts
 
 # A claim resting on a single source cannot exceed this, however authoritative
 # that source is: one record is one record.
@@ -58,6 +59,35 @@ def build_claims(state: Investigation, facts) -> list[Claim]:
         # only contribution here would be a duplicate of the first one.
         if step.key == "assemble":
             continue
+
+        # An event scan returns several independent facts — two different wars
+        # both reached Gloamreach — and collapsing them into one claim would cite
+        # the second war's page as evidence for the first war's date.
+        if step.key == "events":
+            for row in step.evidence:
+                claims.append(Claim(
+                    text=f"{row.subject_name}'s {row.attribute.replace('_', ' ')} "
+                         f"is recorded as {row.value_text}.",
+                    claim_type=ClaimType.DIRECT,
+                    confidence=score([row]),
+                    evidence=[row],
+                    step_key=step.key,
+                ))
+            continue
+
+        # The temporal comparison is a *derived* conclusion: no source states it,
+        # and it holds only because two sources state the dates it rests on. It
+        # is kept distinct from the direct facts for exactly that reason.
+        if step.key == "temporal":
+            claims.append(Claim(
+                text=state.computation.get("result_text") or state.answer_value,
+                claim_type=ClaimType.INFERRED,
+                confidence=score(step.evidence, hops=1),
+                evidence=step.evidence,
+                step_key=step.key,
+            ))
+            continue
+
         rows = step.evidence
         view = _view_for(rows)
         if view:
@@ -103,6 +133,10 @@ def build_claims(state: Investigation, facts) -> list[Claim]:
             claim_type=ClaimType.UNSUPPORTED,
             confidence=0.0,
         ))
+
+    # Read the original passage back for every row an answer rests on. The fact
+    # store located the evidence; the archive is still where the evidence is.
+    attach_excerpts([row for claim in claims for row in claim.evidence], facts.store)
     return claims
 
 

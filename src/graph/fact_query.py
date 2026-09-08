@@ -40,6 +40,11 @@ class FactRow:
     page: int | None
     source_class: str
     reliability: float
+    # The sentence in the original document that carries this value. Filled in
+    # when the claim is built, by reading the chunk back out of the archive.
+    # A fact is a pointer into a source, not a replacement for it: quoting the
+    # source is what lets a reader check the extraction rather than trust it.
+    excerpt: str = ""
 
     def citation(self, title: str = "") -> str:
         where = f"p.{self.page}" if self.page else "infobox"

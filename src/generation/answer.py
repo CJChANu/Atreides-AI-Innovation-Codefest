@@ -86,6 +86,10 @@ def render(state: Investigation, title_of, *, show_trace: bool = True) -> str:
             where = f"p.{evidence.page}" if evidence.page else "infobox"
             lines.append(f"      └─ {title_of(evidence.document_id)} "
                          f"[{evidence.source_class}, {where}]  {evidence.chunk_id}")
+            # The line the value was actually read from. A citation says where to
+            # look; the quote is what lets a reader check without looking.
+            if evidence.excerpt:
+                lines.append(f"         “{evidence.excerpt}”")
     lines.append("")
 
     # -- how the facts connect ---------------------------------------------
