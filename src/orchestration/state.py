@@ -163,6 +163,10 @@ class Investigation:
     # with the fact's value; a reverse lookup answers with its subject. Recording
     # it explicitly beats re-deriving it from the rendered evidence chain.
     answer_value: str = ""
+    # Which mode actually ran, and what the LLM contributed. Both surface in the
+    # trace so a viewer can tell an LLM-assisted run from a deterministic one.
+    ai_mode: str = "deterministic"
+    assist_notes: list[str] = field(default_factory=list)
     stop_reason: StopReason = StopReason.ITERATION_BUDGET
     queries_issued: int = 0
     graph_expansions: int = 0
@@ -197,6 +201,8 @@ class Investigation:
                 "graph_expansions": self.graph_expansions,
                 "elapsed_seconds": round(self.elapsed_seconds, 3),
                 "stop_reason": self.stop_reason.value,
+                "ai_mode": self.ai_mode,
+                "assist_notes": self.assist_notes,
             },
             "trace": [i.to_dict() for i in self.iterations],
         }

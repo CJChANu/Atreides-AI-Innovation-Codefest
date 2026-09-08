@@ -35,7 +35,9 @@ from src.orchestration.state import (
     SubQuestion,
 )
 from src.orchestration.understanding import QuestionAnalyzer
+from src.orchestration.llm_assist import merge_understanding, verify_extracted_claims
 from src.retrieval.figures import FigureIndex
+from src.retrieval.hybrid import HybridRetriever
 from src.retrieval.keyword import KeywordIndex
 from src.storage.db import ArchiveStore
 from src.verification.claims import build_claims
@@ -76,7 +78,8 @@ def _is_non_value(value: str) -> bool:
 
 
 class Investigator:
-    def __init__(self, store: ArchiveStore, budget: InvestigationBudget) -> None:
+    def __init__(self, store: ArchiveStore, budget: InvestigationBudget, *,
+                 gateway=None, retriever: HybridRetriever | None = None) -> None:
         self.store = store
         self.budget = budget
         self.analyzer = QuestionAnalyzer(store)
@@ -84,12 +87,41 @@ class Investigator:
         self.graph = GraphQuery(store)
         self.keyword = KeywordIndex(store)
         self.figures = FigureIndex(store)
+        # Both optional. Absent, the loop is exactly the deterministic system it
+        # was before — which is the fallback mode, not a degraded special case.
+        self.gateway = gateway
+        self.retriever = retriever
+
+    @property
+    def llm_available(self) -> bool:
+        return bool(self.gateway and self.gateway.available)
+
+    def _text_search(self, query: str, entities: list[str] | None = None, limit: int = TEXT_HITS):
+        """Retrieve passages through the hybrid retriever when it is wired in."""
+        if self.retriever is not None:
+            return self.retriever.search(query, limit=limit, entities=entities)
+        return self.keyword.search(query, limit=limit)
 
     def investigate(self, text: str) -> Investigation:
         started = time.perf_counter()
         question = self.analyzer.analyze(text)
+
+        # LLM assistance is additive: it may fill gaps the rules left, never
+        # overrule an entity that was matched against the archive index.
+        if self.llm_available:
+            outcome = merge_understanding(
+                question, self.gateway.understand_question(text), self.analyzer
+            )
+            state_notes = outcome.notes
+        else:
+            state_notes = []
+            if self.gateway is not None:
+                self.gateway.note_fallback("understanding: deterministic parser used")
+
         self._orient_hop(question)
         state = Investigation(question=question, sub_questions=decompose(question))
+        state.assist_notes = state_notes
+        state.ai_mode = "llm_assisted" if self.llm_available else "deterministic"
 
         if not question.entities and question.intent is not Intent.INVERSE_HOP:
             # Nothing in the question matches anything we indexed. Say so rather
@@ -196,8 +228,8 @@ class Investigator:
             return True
 
         # No structured facts: fall back to text so the question is not abandoned.
-        hits = self.keyword.search(name, limit=TEXT_HITS)
-        iteration.retrieval_modes.append("keyword")
+        hits = self._text_search(name, entities=[name])
+        iteration.retrieval_modes.append("hybrid" if self.retriever else "keyword")
         iteration.retrieved_chunks = [h.chunk_id for h in hits]
         if hits:
             step.satisfy([], f"no structured facts; {len(hits)} passages retrieved")
@@ -324,11 +356,24 @@ class Investigator:
             return True
 
         query = f"{subject_name or ''} {attribute or ''}".strip()
-        hits = self.keyword.search(query, limit=TEXT_HITS)
-        iteration.retrieval_modes.append("keyword")
+        hits = self._text_search(query, entities=[subject_name] if subject_name else None)
+        iteration.retrieval_modes.append("hybrid" if self.retriever else "keyword")
         iteration.retrieved_chunks = [h.chunk_id for h in hits]
         if hits:
             iteration.new_claims = [f"passage: {' '.join(hits[0].content.split())[:120]}…"]
+            if hasattr(hits[0], "explain"):
+                iteration.new_claims.append(f"top hit scored {hits[0].explain()}")
+
+        # Narrative sources state relations in prose that no table records. The
+        # LLM may propose claims from those passages, but each one is checked
+        # against the passage it cites before it is allowed to count.
+        if hits and self.llm_available:
+            extracted = self._llm_claims_from(hits, attribute or "", subject_name, iteration)
+            if extracted:
+                step.satisfy([], f"claim extracted from narrative: {extracted[0]}")
+                state.evidence_chain.append(extracted[0])
+                state.answer_value = state.answer_value or extracted[0]
+                return True
         # Passages are context, not an answer. This step asked for a *value*, and
         # retrieving prose that might mention one does not meet that condition —
         # marking it satisfied here is how a system ends up reporting "all
@@ -339,8 +384,8 @@ class Investigator:
 
     def _act_inverse_lookup(self, question, step, state, iteration, learned) -> bool:
         """No subject named: find subjects whose attribute matches the question."""
-        iteration.retrieval_modes = ["facts", "keyword"]
-        hits = self.keyword.search(question.text, limit=TEXT_HITS)
+        iteration.retrieval_modes = ["facts", "hybrid" if self.retriever else "keyword"]
+        hits = self._text_search(question.text)
         iteration.retrieved_chunks = [h.chunk_id for h in hits]
         if hits:
             step.satisfy([], f"{len(hits)} candidate passages")
@@ -390,8 +435,21 @@ class Investigator:
         return True
 
     def _act_text_search(self, question, step, state, iteration, learned) -> bool:
-        iteration.retrieval_modes = ["keyword"]
-        hits = self.keyword.search(question.text, limit=TEXT_HITS)
+        iteration.retrieval_modes = ["hybrid" if self.retriever else "keyword"]
+        entities = [name for _, name in question.entities]
+        query = question.text
+        # When earlier steps have already learned something, let the LLM propose a
+        # query aimed at what is still missing rather than repeating the question.
+        if self.llm_available and state.evidence_chain:
+            suggested = self.gateway.suggest_queries(
+                question.text, state.evidence_chain, step.text
+            )
+            if suggested:
+                query = suggested[0]
+                iteration.query = query
+                iteration.reason = f"LLM proposed a query targeting the remaining gap: {query!r}"
+                state.queries_issued += len(suggested) - 1
+        hits = self._text_search(query, entities=entities)
         iteration.retrieved_chunks = [h.chunk_id for h in hits]
         if hits:
             iteration.new_claims = [f"{h.citation()}" for h in hits[:3]]
@@ -445,6 +503,21 @@ class Investigator:
         return True
 
     # -- helpers ------------------------------------------------------------
+
+    def _llm_claims_from(self, hits, attribute: str, subject_name: str, iteration) -> list[str]:
+        """Ask the LLM for claims in these passages, then verify each one."""
+        allowed = {h.chunk_id: h.content for h in hits}
+        gap = f"{subject_name} {attribute}".strip() or "the question"
+        proposed = self.gateway.extract_claims(gap, [(h.chunk_id, h.content) for h in hits])
+        if not proposed:
+            return []
+
+        kept, rejected = verify_extracted_claims(proposed, allowed)
+        for reason in rejected:
+            # Rejections are shown, not hidden: they are the evidence that the
+            # verification gate is doing something.
+            iteration.new_claims.append(f"REJECTED unsupported LLM claim: {reason}")
+        return [f"{c['subject']} — {c['predicate']}: {c['value']}" for c in kept]
 
     def _name_of(self, subject_id: str, question: Question, state: Investigation) -> str:
         """Display name for a subject, preferring what the loop already learned."""

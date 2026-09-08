@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.common.config import SETTINGS  # noqa: E402
 from src.generation.answer import render  # noqa: E402
 from src.graph.fact_query import FactQuery  # noqa: E402
-from src.orchestration.investigator import Investigator  # noqa: E402
+from src.orchestration.factory import build_system  # noqa: E402
 from src.storage.db import ArchiveStore  # noqa: E402
 
 
@@ -40,8 +40,13 @@ def main() -> int:
         budget = replace(budget, max_iterations=args.max_iterations)
 
     with ArchiveStore(SETTINGS.db_path) as store:
-        state = Investigator(store, budget).investigate(" ".join(args.question))
+        investigator, gateway, modes = build_system(store, SETTINGS, budget=budget)
+        if not args.json:
+            print(f"mode: {modes.label}\n")
+        state = investigator.investigate(" ".join(args.question))
         title_of = FactQuery(store).title_of
+        if not args.json and gateway.fallback_events:
+            print(f"\nFALLBACKS\n  " + "\n  ".join(dict.fromkeys(gateway.fallback_events)))
         if args.json:
             print(json.dumps(state.to_dict(title_of), indent=2, ensure_ascii=False))
         else:
