@@ -8,3 +8,6 @@ pymupdf==1.28.2          # PDF text, page geometry, tables, embedded images
 python-docx==1.2.0      # DOCX paragraphs, headings and tables in document order
 pytesseract==0.3.13      # OCR bridge for the 17 scanned PDFs and the figure plates
 pillow==12.3.0             # image handling for the OCR path
+numpy==2.5.3             # LSA embeddings and vector search
+fastapi==0.141.1         # HTTP API
+uvicorn==0.52.4          # ASGI server for the API
