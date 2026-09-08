@@ -71,6 +71,13 @@ _COLUMNS_HEADER = re.compile(r"^columns\s*:", re.IGNORECASE)
 _YEAR_LABEL = re.compile(r"^\d{1,4}\s*AS$", re.IGNORECASE)
 
 _ROW = re.compile(r"^\s*(?P<label>[^|]{1,60}?)\s*\|\s*(?P<value>.+?)\s*$")
+
+# Words that name a *field*, never a subject. Used to reject a mis-detected
+# heading before it becomes a fact subject.
+_LABEL_LIKE = SKIP_LABELS | set(ATTRIBUTE_ALIASES) | {
+    "region", "status", "founded", "habit", "lair", "seat", "role", "born",
+    "type", "doctrine", "outcome", "victor", "appearance", "demeanor", "danger",
+}
 _NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 _YEAR = re.compile(r"\b(\d{1,4})\s*AS\b", re.IGNORECASE)
 
@@ -109,14 +116,31 @@ def clean_value(raw: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+# Words that decorate a value without changing it. "The Gloaming Reach" and
+# "Gloaming Reach" are the same place; "5805" and "5805 troops" are the same
+# count. Left in, each pair is reported to the user as a source disagreement,
+# which devalues the real conflicts sitting beside them.
+_LEADING_ARTICLE = re.compile(r"^(the|a|an)\s+")
+_TRAILING_UNITS = re.compile(
+    r"\s+(troops|soldiers|men|souls|souls under arms|swords|spears|strong)$")
+
+
 def value_key(value: str) -> str:
     """Comparison key for conflict detection.
 
-    Case and trailing punctuation are presentation, not disagreement: a codex
-    saying "Contested" and a wiki saying "contested" agree. Only differences that
-    survive this normalisation are reported as conflicts.
+    Case, punctuation, a leading article and a trailing unit noun are all
+    presentation rather than disagreement. Only differences that survive this
+    normalisation are reported as conflicts — anything looser would start merging
+    genuinely different values, which is the more damaging error.
     """
-    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+    # Digit-group separators first: without this "3,107" splits into "3 107" and
+    # never matches the same count written plainly.
+    key = re.sub(r"(?<=\d),(?=\d)", "", value.lower())
+    key = re.sub(r"[^a-z0-9]+", " ", key).strip()
+    key = _LEADING_ARTICLE.sub("", key)
+    for _ in range(2):                      # "5805 souls under arms" → "5805"
+        key = _TRAILING_UNITS.sub("", key)
+    return key.strip()
 
 
 def numeric_value(value: str) -> float | None:
@@ -227,6 +251,12 @@ class FactExtractor:
         head = section.split(" > ")[0] if section else ""
         # Wiki headings are often themselves links ('[[Gloamreach]] (location)').
         head = WIKILINK.sub(lambda m: m.group(1), head).strip("[] ")
+        # A heading that is itself a field label is not a subject. PDF heading
+        # detection sometimes picks up a table's column header ("Region",
+        # "Status"), and a fact subject named after an attribute later collides
+        # with that same word appearing in a question.
+        if head and head.lower() in _LABEL_LIKE:
+            head = ""
         if head and head.lower() not in {"infobox", "classification"}:
             return head
         return row["title"]

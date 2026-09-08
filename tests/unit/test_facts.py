@@ -64,3 +64,22 @@ def test_a_plate_is_only_quoted_when_its_label_is_recognised():
     assert not has_readable_label("")
     assert has_readable_label("Weeping Lurker THREAT RATING 3 of 10, per the Vanguard scale")
     assert has_readable_label("Marrowwatch RECORDED GARRISON STRENGTH 3,107 souls under arms")
+
+
+def test_presentation_differences_are_not_conflicts():
+    """Reporting these as source disagreements devalues the real ones."""
+    from src.graph.facts import value_key
+
+    assert value_key("The Gloaming Reach") == value_key("Gloaming Reach")
+    assert value_key("5805") == value_key("5805 troops")
+    assert value_key("3,107 souls under arms") == value_key("3107")
+    assert value_key("67,349") == value_key("67349")
+
+
+def test_genuinely_different_values_still_conflict():
+    """The normalisation must not start merging real disagreements."""
+    from src.graph.facts import value_key
+
+    assert value_key("65 AS") != value_key("265 AS")
+    assert value_key("391 AS") != value_key("Contested; no year is stated")
+    assert value_key("Greyfell Citadel") != value_key("Ironfell Citadel")
