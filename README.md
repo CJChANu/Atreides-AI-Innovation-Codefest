@@ -11,11 +11,11 @@ investigation, searches iteratively, expands connected entities across documents
 verifies evidence, and answers with page-level citations, confidence, conflicts,
 and a visible trace of why it stopped.
 
-> **Status — Phases 1–3 are complete and running.** Ingestion, the three indexes,
-> the bounded investigation loop, claim verification and grounded answer
-> generation all work end-to-end on the real archive, with no API key required.
-> Vector retrieval and the web UI are the remaining phases; see
-> [docs/roadmap.md](docs/roadmap.md) for exactly what is and is not built.
+> **Status — the full path runs end to end: ingestion → four indexes → hybrid
+> retrieval → bounded investigation → verification → API and web UI.** It works
+> with **no API key at all**; adding one activates LLM assistance with no code
+> change. Vision analysis of chart and heraldry plates is the main remaining gap —
+> see [docs/limitations.md](docs/limitations.md) for exactly what that costs.
 
 ---
 
@@ -53,8 +53,12 @@ data rather than assumed:
 | Investigation loop | working | Bounded state machine; each query derived from the last result |
 | Claim verification | working | direct / inferred / conflicting / unsupported, with bounded confidence |
 | Answer + trace | working | Answer, evidence chain, citations, conflicts, stop reason |
-| Vector index | planned | Phase 2 |
-| Web UI | planned | Phase 4 |
+| Vector index | working | Local LSA embeddings, 2,547 chunks, 256 dims, 2.4 MB, builds in 7 s |
+| Hybrid retrieval | working | BM25 + vector + entity overlap + source quality, weights measured not asserted |
+| AI gateway | working | One controlled entry point: schemas, retries, backoff, cache, circuit breaker, fallback |
+| LLM assistance | working | Optional; adds signal, never overrules the archive index |
+| API + web UI | working | FastAPI; answer, citations, evidence chain, graph path, conflicts, trace, stop reason |
+| Vision analysis | not built | The main remaining gap — see limitations |
 
 Measured on the full archive:
 
@@ -100,8 +104,31 @@ cp configuration-example/.env.example .env
 
 ```bash
 python scripts/ingest_archive.py --reset   # ~3 min with OCR, ~45 s without
-python scripts/build_indexes.py            # graph + facts, ~1 s
+python scripts/build_indexes.py            # graph + facts + vector index, ~8 s
+python run_api.py                          # → http://127.0.0.1:8000
 ```
+
+The web UI shows the answer, every claim labelled `direct` / `inferred` /
+`conflicting` / `unsupported` with per-source reliability, the evidence chain, the
+knowledge-graph path, competing sources and how the conflict was resolved, which
+sub-questions were satisfied or failed, the full search trace including any
+rejected LLM claims, the stop reason, and every fallback event. The banner shows
+which subsystems are live.
+
+### Optional: LLM assistance
+
+Everything above runs with no key. To enable the assisted path, put a free
+OpenRouter key in `.env`:
+
+```bash
+AEA_LLM_API_KEY=sk-or-...
+```
+
+The system then uses the LLM for question understanding, gap-directed query
+suggestion and candidate-claim extraction from narrative prose — under the guards
+in [docs/decisions.md](docs/decisions.md) D16. If the key is absent, invalid,
+rate-limited or the provider is down, it falls back to the deterministic path and
+says so in the trace.
 
 Then ask it a question:
 
@@ -164,20 +191,30 @@ second run is a no-op.
 ### Ablation
 
 ```bash
-python scripts/run_eval.py
+python scripts/run_eval.py            # what each layer adds on the dev questions
+python scripts/run_retrieval_eval.py  # what semantic retrieval adds on paraphrases
+python scripts/sweep_weights.py       # reproduce the fusion-weight measurement
 ```
 
-| configuration | answered | cited | partial |
-|---|---:|---:|---:|
-| keyword only (1 lookup) | 20 | 20 | — |
-| loop, 1 iteration | 0 | 0 | 20 |
-| loop, 2 iterations | 11 | 10 | 20 |
-| **full loop** | **11** | **10** | **6** |
+| configuration | cited | conflicts found | multi-hop | partial |
+|---|---:|---:|---:|---:|
+| keyword only, 1 lookup | 0 | 0 | 0 | 20 |
+| keyword + loop | 10 | 2 | 5 | 7 |
+| hybrid + loop | 10 | 2 | 5 | 7 |
 
-A keyword lookup "answers" all twenty questions because it always returns *a
-passage* — which is exactly why answered-count alone is a misleading metric. The
-loop's later iterations do not find more answers; they find the **conflicts** and
-resolve them, which is what drops the partial count from 20 to 6.
+**Hybrid retrieval changes nothing on these 20 questions, and we report that
+rather than hiding it.** The supplied questions reuse the archive's own vocabulary
+almost verbatim, so BM25 already wins them. To find out whether embeddings help at
+all, we wrote a paraphrase probe worded to avoid archive vocabulary:
+
+| | R@1 | R@3 | R@5 |
+|---|---:|---:|---:|
+| keyword only | 5/10 | 7/10 | 7/10 |
+| plan's proposed 0.35/0.45 | 4/10 | 7/10 | 8/10 |
+| **measured 0.50/0.30** | **5/10** | 7/10 | **8/10** |
+
+That measurement changed the shipped weights — see
+[docs/decisions.md](docs/decisions.md) D15.
 
 By sub-track:
 
@@ -198,12 +235,17 @@ to open and marks the answer PARTIAL — see
 pytest
 ```
 
-85 tests. The unit tests pin the rules that citations depend on (ID stability,
-provenance inheritance, table integrity, conflict normalisation, confidence
-bounds); the integration tests run the real pipeline and the real loop over a
-miniature corpus, and assert that every claim names a chunk that exists, that the
-loop respects its budget, and that an unanswerable question is never reported as
-supported.
+133 tests, in four groups:
+
+- **unit** — the rules citations depend on: ID stability, provenance inheritance,
+  table integrity, conflict normalisation, confidence bounds, schema validation,
+  and the guards that stop LLM output overruling the index.
+- **integration** — the real pipeline, the real loop and the real HTTP API:
+  every claim names a chunk that exists, the loop respects its budget, an
+  unanswerable question is never reported as supported.
+- **failure_modes** — the fallback matrix: retries, rate limits, non-retryable
+  4xx, circuit opening and closing, corrupt cache entries, unconfigured gateway.
+- **evaluation** — the paraphrase probe backing the weight measurement.
 
 ---
 
@@ -216,11 +258,16 @@ src/
   storage/       SQLite schema and store (metadata + FTS5 + graph + facts)
   retrieval/     keyword/BM25 search  (vector + fusion: Phase 2)
   graph/         entity normalisation, graph builder, traversal, fact extraction
-  orchestration/ query understanding, decomposition, the bounded loop
+  ai_gateway/    the ONLY place that calls a provider: schemas, cache, breaker, adapters
+  indexes/       persistent vector index
+  retrieval/     keyword (BM25/FTS5), hybrid fusion, figure lookup
+  orchestration/ query understanding, decomposition, the bounded loop, LLM guards
   verification/  claim classification, confidence, contradiction handling
   generation/    grounded answer and trace rendering
-  api/           FastAPI surface  (Phase 4)
-scripts/         ingest_archive.py, build_indexes.py, ask.py, search.py, run_eval.py
+  api/           FastAPI app, response mapping, web UI
+scripts/         ingest_archive · build_indexes · ask · search · run_eval
+                 run_retrieval_eval · sweep_weights
+run_api.py       start the API and UI
 tests/           unit + integration
 docs/            architecture, decisions, data model, limitations, roadmap, diagrams
 ai_usage/        AI usage disclosure and exported chat logs
@@ -230,6 +277,7 @@ ai_usage/        AI usage disclosure and exported chat logs
 
 - [docs/architecture.md](docs/architecture.md) — components and data flow
 - [docs/investigation-protocol.md](docs/investigation-protocol.md) — how the 1C loop searches and stops
+- [docs/api.md](docs/api.md) — endpoints, response shape, boundary security
 - [docs/data-model.md](docs/data-model.md) — every table and what it guarantees
 - [docs/decisions.md](docs/decisions.md) — the choices we made and what we rejected
 - [docs/limitations.md](docs/limitations.md) — what does not work, and what we tried that failed
@@ -238,5 +286,10 @@ ai_usage/        AI usage disclosure and exported chat logs
 
 ## Security
 
-No API key is ever committed. Keys are read from the environment or a git-ignored
-`.env`; `configuration-example/.env.example` contains placeholders only.
+- No API key is ever committed. Keys come from the environment or a git-ignored
+  `.env`; `configuration-example/.env.example` holds placeholders only, and
+  `/api/health` reports *whether* a key is configured, never its value.
+- Asset routes take an id and resolve the path from the index, then verify it
+  sits inside the corpus or the derived-assets directory — a crafted `../../`
+  cannot escape the archive.
+- The corpus is opened read-only; no endpoint mutates it.
