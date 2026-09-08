@@ -1,0 +1,19 @@
+# Secrets — never commit. A leaked key in an old commit stays leaked.
+.env
+*.key
+
+# Derived data. Rebuilt from the read-only corpus by scripts/ingest_archive.py,
+# so it must never be part of the repository.
+data/*
+!data/README.md
+
+# Environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# OS noise
+.DS_Store

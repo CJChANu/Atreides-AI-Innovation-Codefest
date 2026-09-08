@@ -1,0 +1,10 @@
+# Runtime dependencies. Pinned so a judge's environment matches ours exactly.
+#
+# Deliberately small: SQLite (stdlib) provides both the metadata store and the
+# BM25 keyword index via FTS5, so there is no database service to install.
+# See docs/decisions.md for why.
+
+pymupdf==1.28.2          # PDF text, page geometry, tables, embedded images
+python-docx==1.2.0      # DOCX paragraphs, headings and tables in document order
+pytesseract==0.3.13      # OCR bridge for the 17 scanned PDFs and the figure plates
+pillow==12.3.0             # image handling for the OCR path
