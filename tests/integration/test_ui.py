@@ -37,6 +37,18 @@ def test_the_sandstorm_script_is_served_and_exposes_its_control_api(client, page
         assert re.search(rf"\b{method}\s*\(", script.text), method
 
 
+def test_the_storm_reacts_to_the_pointer(client):
+    """The sand must be a field the cursor disturbs, not a looping backdrop."""
+    script = client.get("/static/sandstorm.js").text
+    # Grains are shoved aside, curled into the wake and carried along.
+    for knob in ("pushStrength", "dragStrength", "swirl", "pointerRadius"):
+        assert knob in script, knob
+    assert "applyPointer" in script
+    # Fast movement throws sand up, and touch drives the same field.
+    assert "kickSpeed" in script and "makeSpark" in script
+    assert "touchmove" in script and "pointermove" in script
+
+
 def test_the_storm_respects_reduced_motion_and_hidden_tabs(client):
     """Ambient motion must never be mandatory, and must not run in a background tab."""
     script = client.get("/static/sandstorm.js").text

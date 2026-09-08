@@ -56,6 +56,9 @@
   header{display:flex;align-items:center;gap:18px;padding:6px 0 18px;
          border-bottom:1px solid var(--line);margin-bottom:16px}
   .crest{width:84px;height:84px;flex:none;filter:drop-shadow(0 0 18px rgba(200,167,101,.22))}
+  .crest-img{object-fit:contain;border-radius:50%;
+    animation:crestIn .7s cubic-bezier(.2,.8,.3,1) both}
+  @keyframes crestIn{from{opacity:0;transform:scale(.88) rotate(-6deg)}to{opacity:1;transform:none}}
   .crest .ring{animation:spin 64s linear infinite;transform-origin:60px 60px}
   .crest .ring-2{animation:spin 96s linear infinite reverse;transform-origin:60px 60px}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -335,7 +338,8 @@
   </div>
 
   <div class="samples">
-    <b>Try one of these</b>
+    <b>Try one of these<span style="float:right;font-weight:400;letter-spacing:.06em;
+      text-transform:none;color:#5f574b">sweep the cursor across the dunes</span></b>
     <button class="chip" data-q="Whose dominion encompasses the lair of the Gravemaw Wyrm?">
       Gravemaw Wyrm's ruler<small>multi-hop · 1B</small></button>
     <button class="chip" data-q="In which year was the Gauntlet of Sorrowfell actually forged?">
@@ -358,15 +362,26 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-/* If a logo.png is dropped beside this file, prefer it over the inline crest. */
+/* Prefer the real crest image when one has been installed
+   (scripts/set_logo.py). The inline SVG stands in until then, so the UI never
+   depends on an asset being present. */
 (() => {
-  const img = new Image();
-  img.onload = () => {
-    const el = document.createElement("img");
-    el.src = "/static/logo.png"; el.className = "crest"; el.alt = "Atreides Archive";
-    $("#crest").replaceWith(el);
+  const candidates = ["/static/logo.png", "/static/logo.svg",
+                      "/static/logo.webp", "/static/logo.jpg"];
+  const tryNext = (i) => {
+    if (i >= candidates.length) return;
+    const probe = new Image();
+    probe.onload = () => {
+      const el = document.createElement("img");
+      el.src = candidates[i];
+      el.className = "crest crest-img";
+      el.alt = "Atreides Archive";
+      $("#crest")?.replaceWith(el);
+    };
+    probe.onerror = () => tryNext(i + 1);
+    probe.src = candidates[i];
   };
-  img.src = "/static/logo.png";
+  tryNext(0);
 })();
 
 async function loadHealth(){
@@ -508,6 +523,8 @@ function render(d){
 
 async function ask(question){
   $("#go").disabled = true;
+  const go = $("#go").getBoundingClientRect();
+  window.Sandstorm?.kick(go.left + go.width / 2, go.top + go.height / 2, 30);
   window.Sandstorm?.gust(1);
   window.Sandstorm?.surge();          // the desert rises while the archive is searched
   $("#out").innerHTML = `<section><div class="searching">
