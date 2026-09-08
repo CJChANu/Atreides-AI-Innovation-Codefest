@@ -12,7 +12,17 @@ Verified on the full archive: 339 documents (321 indexed), 1,330 pages, 2,547
 chunks, 227 tables, 187 figures, 417 entities, 1,912 edges, 1,499 facts, 34
 conflicts. 50 tests passing.
 
-## Phase 2 — Semantic retrieval and fusion
+## Phase 2 — Semantic retrieval and fusion ✅ complete
+
+Local LSA embeddings, a persistent vector index (2,547 chunks, 256 dims, 2.4 MB,
+7 s build), hybrid four-signal fusion, and measured rather than asserted weights.
+See decision D15 and `scripts/sweep_weights.py`.
+
+Not done: a vision pass over chart and heraldry plates. Deliberately deferred —
+the team's instruction was to get the hybrid + LLM + UI path working end to end
+first.
+
+## Phase 2 (original plan text)
 
 - Embedding adapter behind a cache (an unchanged chunk is embedded once, ever)
 - Vector index, local-first so the system runs without network access
@@ -31,15 +41,26 @@ every answer, and a JSON trace.
 All seven 1B and both 1C development questions resolve with page citations. See
 `docs/investigation-protocol.md`.
 
-## Phase 4 — Verification and grounded answers ◐ mostly complete
+## Phase 4 — Verification, API and UI ✅ complete
 
-Done: the claim model (direct / inferred / conflicting / unsupported), bounded
+The claim model (direct / inferred / conflicting / unsupported), bounded
 confidence scoring, reliability-aware conflict reporting, the grounded answer and
-trace renderer, and figure-plate evidence when a value exists only on an
-illustration.
+trace renderer, figure-plate evidence, the FastAPI service and a web UI showing
+answer, cited claims, evidence chain, graph path, conflicts, sub-question status,
+the full trace and every fallback event.
 
-Remaining: the HTTP API and a web UI rendering the same payload the CLI prints,
-with the cited page image inline.
+## Phase 4b — AI gateway and LLM-assisted loop ✅ complete
+
+One controlled gateway (schema validation, retries, backoff, caching, timeouts,
+circuit breaker, usage accounting, fallback matrix) and an LLM-assisted loop where
+the model may add signal but never overrule the archive index. Runs fully without
+an API key; adding one activates the assisted path with no code change.
+
+## Remaining
+
+- Vision pass over chart and heraldry plates (closes 9 of the 11 1A questions)
+- Recursive bridge steps for three-plus-hop questions
+- Docker packaging
 
 ## Phase 5 — Hardening
 

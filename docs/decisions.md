@@ -236,7 +236,81 @@ useful than picking one.
 
 ---
 
-## D14 — Configuration in one place, secrets never in the repo
+## D14 — One AI gateway, never direct provider calls
+
+**Chosen:** every external AI call goes through `src/ai_gateway`. No other module
+may import a provider SDK or open a socket to one.
+
+**Why:** retries, backoff, caching, timeouts, the circuit breaker, usage
+accounting, schema validation and fallback all become properties of the *system*
+rather than things each call site has to remember. It also means "what happens
+when the LLM is down?" has one answer, in one file, that can be demonstrated.
+
+The retry policy and the circuit breaker are separate on purpose. Retry handles
+one call hitting a blip; the breaker handles the provider being *down*. Without
+the breaker a six-iteration investigation against a dead endpoint costs six
+timeouts and a live demo stalls; with it, the first failure trips the circuit and
+every later call falls back instantly.
+
+---
+
+## D15 — Local LSA embeddings, and measured fusion weights
+
+**Chosen:** Latent Semantic Analysis fitted on the archive itself, and a
+lexical/semantic split of 0.50/0.30 rather than the plan's proposed 0.35/0.45.
+
+**Why LSA rather than a hosted or pretrained embedding model:** the vocabulary is
+invented. Nothing in a public embedding space knows that "Vharencrag" and
+"fortress" co-occur, but this corpus does. LSA is also deterministic (a cited
+answer reproduces for a judge), free, offline (a rate limit cannot break a live
+demo), and builds the whole 2,547-chunk index in 7 seconds to 2.4 MB. When an
+embedding API key is configured the adapter uses it instead and records the model
+name in the index so the two are never silently mixed.
+
+**Why the weights changed — and this one is worth reading.** On the 20 supplied
+development questions, hybrid retrieval changed nothing: 10 cited answers with or
+without the vector index. The honest reading is that those questions reuse the
+archive's own vocabulary almost verbatim, so BM25 already wins them — it is a
+property of the question set, not evidence about embeddings.
+
+So we wrote a 10-question paraphrase probe, deliberately worded to avoid archive
+vocabulary ("which side came out on top in the drowned light conflict"), and
+measured document recall:
+
+| split | R@1 | R@3 | R@5 |
+|---|---|---|---|
+| keyword only | 5/10 | 7/10 | 7/10 |
+| 0.35 / 0.45 *(plan's proposal)* | **4/10** | 7/10 | 8/10 |
+| **0.50 / 0.30 *(chosen)*** | **5/10** | 7/10 | **8/10** |
+
+The plan's vector-leaning default *lost* a top-1 hit for no gain at depth 5.
+At 0.50/0.30 the hybrid matches keyword-only on precision and beats it on recall.
+`scripts/sweep_weights.py` reproduces the table, so the weights are evidence
+rather than a guess.
+
+---
+
+## D16 — The LLM may add, never overrule
+
+**Chosen:** LLM assistance is strictly additive, and every guard is code rather
+than prompt instruction.
+
+- A suggested entity is resolved through the archive index before it is accepted;
+  a name the archive does not contain is dropped.
+- An attribute or intent the rules already matched is never replaced.
+- Relations outside the supported vocabulary are quarantined as candidates and
+  shown in the trace, never traversed.
+- An extracted claim must cite an evidence id *we supplied*, and its subject and
+  value must actually occur in that passage. Rejections are written into the
+  trace, because they are the visible evidence that the gate works.
+
+**Why not just prompt carefully:** a prompt is a request; a validator is a
+guarantee. The corpus is fictional and unavailable to any public model, so
+anything the model "knows" about the Ashen Era is by definition invented.
+
+---
+
+## D17 — Configuration in one place, secrets never in the repo
 
 Fusion weights, chunk sizes and the investigation budget live in
 `src/common/config.py`, read from the environment. They are configuration, not
