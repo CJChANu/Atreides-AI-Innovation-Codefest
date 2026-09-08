@@ -25,7 +25,17 @@ def page(client):
 
 def test_the_page_is_served(page):
     assert page.startswith("<!doctype html>")
-    assert "ATREIDES" in page
+    assert "Atreides Archive" in page
+
+
+def test_the_wordmark_is_not_duplicated_beside_the_crest(page):
+    """The supplied mark already carries the wordmark and tagline.
+
+    Repeating them in HTML beside the image reads as a mistake, so the heading is
+    present for assistive technology only.
+    """
+    assert 'class="visually-hidden"' in page
+    assert page.count("<h1") == 1
 
 
 def test_the_sandstorm_script_is_served_and_exposes_its_control_api(client, page):
@@ -56,9 +66,43 @@ def test_the_storm_respects_reduced_motion_and_hidden_tabs(client):
     assert "visibilitychange" in script
 
 
-def test_a_missing_logo_falls_back_to_the_inline_crest(client, page):
-    assert client.get("/static/logo.png").status_code == 404
+def test_the_installed_crest_is_served(client):
+    """The real mark is installed via scripts/set_logo.py and served as-is."""
+    response = client.get("/static/logo.png")
+    if response.status_code == 404:
+        pytest.skip("no crest installed; the inline SVG fallback is in use")
+    assert response.headers["content-type"].startswith("image/")
+    assert len(response.content) > 1000
+
+
+def test_the_page_still_carries_the_inline_crest_fallback(page):
+    """The UI must never depend on an asset being present."""
     assert 'id="crest"' in page and "<svg" in page
+    # It probes several formats before giving up and keeping the SVG.
+    for candidate in ("logo.png", "logo.svg", "logo.webp", "logo.jpg"):
+        assert candidate in page, candidate
+
+
+def test_the_installed_crest_has_transparent_corners():
+    """The mark must sit in the scene, not as an opaque square over the desert.
+
+    A blend mode only hides a square background when it is exactly black; this
+    artwork's is a textured near-black, so it showed as a lighter rectangle.
+    set_logo.py masks the asset to its circle instead, which is checkable here.
+    """
+    from src.common.config import REPO_ROOT
+
+    logo = REPO_ROOT / "src" / "api" / "static" / "logo.png"
+    if not logo.is_file():
+        pytest.skip("no crest installed")
+    from PIL import Image
+
+    with Image.open(logo) as image:
+        image = image.convert("RGBA")
+        corners = [(2, 2), (image.width - 3, 2), (2, image.height - 3),
+                   (image.width - 3, image.height - 3)]
+        assert all(image.getpixel(c)[3] == 0 for c in corners), "corners are not transparent"
+        assert image.getpixel((image.width // 2, image.height // 2))[3] > 0, "centre was masked away"
 
 
 def test_the_page_reads_only_fields_the_api_actually_returns(client, page):

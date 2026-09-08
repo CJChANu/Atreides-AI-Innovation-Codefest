@@ -53,25 +53,33 @@
   .wrap{position:relative;z-index:2;max-width:1060px;margin:0 auto;padding:26px 22px 90px}
 
   /* ---- header / crest ---- */
-  header{display:flex;align-items:center;gap:18px;padding:6px 0 18px;
-         border-bottom:1px solid var(--line);margin-bottom:16px}
-  .crest{width:84px;height:84px;flex:none;filter:drop-shadow(0 0 18px rgba(200,167,101,.22))}
-  .crest-img{object-fit:contain;border-radius:50%;
-    animation:crestIn .7s cubic-bezier(.2,.8,.3,1) both}
-  @keyframes crestIn{from{opacity:0;transform:scale(.88) rotate(-6deg)}to{opacity:1;transform:none}}
+  .visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;
+    overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+  header{display:flex;flex-direction:column;align-items:center;text-align:center;
+         padding:14px 0 20px;margin-bottom:14px;position:relative}
+  header:after{content:"";position:absolute;left:12%;right:12%;bottom:0;height:1px;
+    background:linear-gradient(90deg,transparent,var(--line-strong),transparent)}
+  .crest-stage{position:relative;display:grid;place-items:center}
+  /* A slow halo behind the mark, so it sits in the scene rather than on top of it. */
+  .crest-stage:before{content:"";position:absolute;width:118%;height:118%;border-radius:50%;
+    background:radial-gradient(circle,rgba(200,167,101,.13),transparent 62%);
+    filter:blur(14px);animation:breathe 7s ease-in-out infinite}
+  @keyframes breathe{0%,100%{opacity:.55;transform:scale(.97)}50%{opacity:1;transform:scale(1.03)}}
+  .crest{width:190px;height:190px;position:relative}
   .crest .ring{animation:spin 64s linear infinite;transform-origin:60px 60px}
   .crest .ring-2{animation:spin 96s linear infinite reverse;transform-origin:60px 60px}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .title h1{
-    margin:0;font-family:var(--serif);font-weight:700;font-size:27px;
-    letter-spacing:.30em;color:var(--gold);
-    text-shadow:0 0 26px rgba(200,167,101,.22);
-  }
-  .title .sub{
-    display:block;margin-top:5px;font-size:9.5px;letter-spacing:.34em;
-    color:var(--dim);text-transform:uppercase;
-  }
-  .modeline{margin:0 0 20px;font-size:12.5px;color:var(--muted);min-height:44px}
+  /* scripts/set_logo.py masks the mark to its circle, so the artwork sits in the
+     scene with its interior detail intact — no blend-mode trickery, which only
+     works when the source background is exactly black (this one is textured). */
+  .crest-img{width:196px;height:196px;object-fit:contain;
+    filter:drop-shadow(0 0 34px rgba(200,167,101,.16));
+    animation:crestIn .8s cubic-bezier(.2,.8,.3,1) both}
+  @keyframes crestIn{from{opacity:0;transform:scale(.9) translateY(8px)}to{opacity:1;transform:none}}
+  .strapline{margin:2px 0 0;font-size:10px;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--dim)}
+  .strapline span{color:#5c5449}
+  .modeline{margin:0 0 20px;font-size:12.5px;color:var(--muted);min-height:44px;text-align:center}
   .pill{
     display:inline-flex;align-items:center;gap:5px;padding:3px 11px;margin:0 6px 6px 0;
     border:1px solid var(--line);border-radius:99px;background:rgba(10,14,13,.6);
@@ -244,10 +252,9 @@
 
   @media (max-width:720px){
     .wrap{padding:18px 14px 70px}
-    header{gap:12px}
-    .crest{width:60px;height:60px}
-    .title h1{font-size:19px;letter-spacing:.2em}
-    .title .sub{font-size:8px;letter-spacing:.22em}
+    .crest{width:132px;height:132px}
+    .crest-img{width:140px;height:140px}
+    .strapline{font-size:8.5px;letter-spacing:.18em}
     form{flex-direction:column}
     button.go{width:100%}
     .answer{font-size:19px}
@@ -260,64 +267,47 @@
 
 <div class="wrap">
   <header>
-    <!-- Atreides crest. Inline SVG rather than a raster so it scales, inherits the
-         palette and can animate; a logo.png dropped into this folder overrides it. -->
-    <svg class="crest" id="crest" viewBox="0 0 120 120" role="img" aria-label="Atreides Archive">
-      <defs>
-        <linearGradient id="au" x1="0" y1="0" x2="0.3" y2="1">
-          <stop offset="0" stop-color="#f0d9a4"/><stop offset="45%" stop-color="#c8a765"/>
-          <stop offset="100%" stop-color="#6d5228"/>
-        </linearGradient>
-        <radialGradient id="orb" cx="38%" cy="30%">
-          <stop offset="0" stop-color="#4a5450"/><stop offset="70%" stop-color="#1d1c17"/>
-          <stop offset="100%" stop-color="#0d0c09"/>
-        </radialGradient>
-        <linearGradient id="dune" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#5c421f"/><stop offset="100%" stop-color="#241a0d"/>
-        </linearGradient>
-      </defs>
-
-      <!-- rings -->
-      <circle cx="60" cy="60" r="57.5" fill="none" stroke="url(#au)" stroke-width="1.5" opacity=".9"/>
-      <circle class="ring" cx="60" cy="60" r="53" fill="none" stroke="#c8a765"
-              stroke-width=".7" opacity=".4" stroke-dasharray="2 9"/>
-
-      <!-- planet and moon -->
-      <circle cx="60" cy="43" r="27" fill="url(#orb)"/>
-      <circle cx="88" cy="24" r="4.2" fill="#2b2922"/>
-      <circle class="ring-2" cx="60" cy="43" r="33" fill="none" stroke="#c8a765"
-              stroke-width=".5" opacity=".28" stroke-dasharray="1 6"/>
-
-      <!-- dunes -->
-      <path d="M4 88 Q28 74 50 87 Q72 75 116 88 L116 106 L4 106 Z" fill="url(#dune)" opacity=".9"/>
-      <path d="M4 95 Q34 85 58 95 Q84 87 116 96 L116 106 L4 106 Z" fill="#191208" opacity=".85"/>
-
-      <!-- wings: tapered feathers swept up and outward -->
-      <g stroke="url(#au)" stroke-linecap="round" fill="none">
-        <path d="M55 50 L13 21" stroke-width="5.4"/>
-        <path d="M54 57 L11 33" stroke-width="4.8"/>
-        <path d="M53 63 L15 46" stroke-width="4.2"/>
-        <path d="M53 69 L23 58" stroke-width="3.6"/>
-        <path d="M53 74 L32 69" stroke-width="3"/>
-        <path d="M65 50 L107 21" stroke-width="5.4"/>
-        <path d="M66 57 L109 33" stroke-width="4.8"/>
-        <path d="M67 63 L105 46" stroke-width="4.2"/>
-        <path d="M67 69 L97 58" stroke-width="3.6"/>
-        <path d="M67 74 L88 69" stroke-width="3"/>
-      </g>
-
-      <!-- body: tapered spear -->
-      <path d="M60 34 L66 53 L60 101 L54 53 Z" fill="url(#au)"/>
-
-      <!-- head and beak, facing left -->
-      <path d="M60 30 q7.5 1.5 8.5 8.5 q-4.5 4-8.5 4 q-4.5 0-8.5-4 q1-7 8.5-8.5 Z" fill="url(#au)"/>
-      <path d="M51.5 36.5 L43 39.5 L51.5 42 Z" fill="url(#au)"/>
-      <circle cx="56" cy="36.8" r="1.4" fill="#0d0c09"/>
-    </svg>
-    <div class="title">
-      <h1>ATREIDES</h1>
-      <span class="sub">Archive · Intelligence for a Brighter Tomorrow</span>
+    <!-- The supplied mark already carries the wordmark and tagline, so the page
+         shows the artwork rather than repeating it in HTML. The heading below is
+         kept for assistive technology and the document outline. -->
+    <h1 class="visually-hidden">Atreides Archive — Ashen Era Investigator</h1>
+    <div class="crest-stage">
+      <!-- Inline SVG stands in until a real crest is installed
+           (scripts/set_logo.py); the script below swaps it when one exists. -->
+      <svg class="crest" id="crest" viewBox="0 0 120 120" role="img"
+           aria-label="Atreides Archive">
+        <defs>
+          <linearGradient id="au" x1="0" y1="0" x2="0.3" y2="1">
+            <stop offset="0" stop-color="#f0d9a4"/><stop offset="45%" stop-color="#c8a765"/>
+            <stop offset="100%" stop-color="#6d5228"/>
+          </linearGradient>
+          <radialGradient id="orb" cx="38%" cy="30%">
+            <stop offset="0" stop-color="#4a5450"/><stop offset="70%" stop-color="#1d1c17"/>
+            <stop offset="100%" stop-color="#0d0c09"/>
+          </radialGradient>
+        </defs>
+        <circle cx="60" cy="60" r="57.5" fill="none" stroke="url(#au)" stroke-width="1.5" opacity=".9"/>
+        <circle class="ring" cx="60" cy="60" r="53" fill="none" stroke="#c8a765"
+                stroke-width=".7" opacity=".4" stroke-dasharray="2 9"/>
+        <circle cx="60" cy="43" r="27" fill="url(#orb)"/>
+        <circle cx="88" cy="24" r="4.2" fill="#2b2922"/>
+        <path d="M4 88 Q28 74 50 87 Q72 75 116 88 L116 106 L4 106 Z" fill="#3a2a17" opacity=".9"/>
+        <g stroke="url(#au)" stroke-linecap="round" fill="none">
+          <path d="M55 50 L13 21" stroke-width="5.4"/><path d="M54 57 L11 33" stroke-width="4.8"/>
+          <path d="M53 63 L15 46" stroke-width="4.2"/><path d="M53 69 L23 58" stroke-width="3.6"/>
+          <path d="M53 74 L32 69" stroke-width="3"/>
+          <path d="M65 50 L107 21" stroke-width="5.4"/><path d="M66 57 L109 33" stroke-width="4.8"/>
+          <path d="M67 63 L105 46" stroke-width="4.2"/><path d="M67 69 L97 58" stroke-width="3.6"/>
+          <path d="M67 74 L88 69" stroke-width="3"/>
+        </g>
+        <path d="M60 34 L66 53 L60 101 L54 53 Z" fill="url(#au)"/>
+        <path d="M60 30 q7.5 1.5 8.5 8.5 q-4.5 4-8.5 4 q-4.5 0-8.5-4 q1-7 8.5-8.5 Z" fill="url(#au)"/>
+        <path d="M51.5 36.5 L43 39.5 L51.5 42 Z" fill="url(#au)"/>
+        <circle cx="56" cy="36.8" r="1.4" fill="#0d0c09"/>
+      </svg>
     </div>
+    <p class="strapline">Ashen Era archive investigator
+      <span>· Codefest 2026 · sub-track 1C primary, 1B secondary</span></p>
   </header>
 
   <div class="modeline" id="modeline">reading the archive…</div>
