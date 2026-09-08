@@ -1,0 +1,27 @@
+stateDiagram-v2
+    [*] --> Understand
+    Understand: understand question<br/>entities · intent · answer type
+    Understand --> Decompose
+    Decompose: sub-questions<br/>each with a completion condition
+    Decompose --> Search
+
+    Search: search<br/>keyword + vector + graph
+    Search --> Extract
+    Extract: extract entities · claims · relations
+    Extract --> Expand
+    Expand: expand graph<br/>to connected facts
+    Expand --> Assess
+
+    Assess: which sub-questions<br/>still lack evidence?
+    Assess --> Plan: gaps remain, budget left
+    Assess --> Verify: all supported
+    Assess --> Verify: no new evidence<br/>for 2 rounds
+    Assess --> Verify: budget exhausted<br/>(answer marked partial)
+
+    Plan: plan next query<br/>from what was learned
+    Plan --> Search
+
+    Verify: verify support<br/>classify claims · detect conflicts
+    Verify --> Answer
+    Answer: grounded answer<br/>evidence chain · citations ·<br/>confidence · stop reason
+    Answer --> [*]

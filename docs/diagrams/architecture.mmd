@@ -1,0 +1,44 @@
+flowchart TB
+    subgraph corpus["Ashen Era Archive (read-only)"]
+        F1["PDF · 46"]
+        F2["scanned PDF · 17"]
+        F3["DOCX · 50"]
+        F4["Markdown · 95"]
+        F5["plain text · 46"]
+        F6["images · 85"]
+    end
+
+    subgraph offline["OFFLINE — ingestion & indexing"]
+        DISC["discovery<br/>fingerprint · resolve format twins"]
+        PARSE["parsers<br/>one per format · own their provenance"]
+        OCR["OCR adapter<br/>per-page confidence"]
+        CHUNK["structure-aware chunker<br/>tables & figures never split"]
+        STORE[("SQLite store")]
+        FTS["FTS5 / BM25 keyword index"]
+        GRAPH["graph builder<br/>417 entities · 1,912 edges"]
+        FACTS["fact extractor<br/>1,499 facts · 34 conflicts"]
+    end
+
+    subgraph online["ONLINE — investigation (Phase 3)"]
+        UQ["query understanding"]
+        PLAN["planner<br/>sub-questions"]
+        LOOP{"bounded loop<br/>search → extract →<br/>expand → check gaps"}
+        VER["verification<br/>direct · inferred ·<br/>conflicting · unsupported"]
+        GEN["grounded answer<br/>citations · confidence ·<br/>conflicts · stop reason"]
+    end
+
+    corpus --> DISC --> PARSE
+    F2 -.-> OCR
+    F6 -.-> OCR
+    OCR --> PARSE
+    PARSE --> CHUNK --> STORE
+    STORE --> FTS
+    STORE --> GRAPH
+    STORE --> FACTS
+
+    UQ --> PLAN --> LOOP
+    FTS --> LOOP
+    GRAPH --> LOOP
+    FACTS --> LOOP
+    LOOP -->|"evidence still missing"| LOOP
+    LOOP -->|"supported, stale, or budget"| VER --> GEN
