@@ -91,7 +91,74 @@ exactly as many questions, with the same citations. Results still vary slightly
 between runs, because a rate-limited call falls back; that variance is visible in
 the trace as fallback events.
 
+## Provider capability, measured against our own keys (9 Sep 2026)
+
+The plan for this system assumed a model that could read an image. Ours cannot,
+and finding that out changed the design rather than the documentation.
+
+| Capability | Verdict | How we know |
+|---|---|---|
+| Text reasoning | works | `nvidia/nemotron-3-super-120b-a12b:free`, 262k context |
+| Embeddings, per query | works | `voyage-4-lite`, 1024-dim, ~1.1s |
+| Embeddings, bulk re-index | **unusable on free tier** | 3 req/min → ~2h for 2,547 chunks; we ship local LSA |
+| **Vision, on the configured model** | **impossible** | it reports `input_modalities: ["text"]` |
+| Vision, on a separate model | works, intermittently | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` read `4` off a chart plate and described a heraldry emblem correctly |
+| Any free model, sustained | **50 requests/day, account-wide** | `X-RateLimit-Limit: 50`, `limit_source: openrouter_free_tier_daily` |
+
+Two consequences worth stating plainly. Vision needs its own model and its own
+config key (`AEA_VISION_MODEL`), because the text model cannot see at all. And
+the daily cap is account-wide, not per-model: once 50 requests are spent, every
+model returns 429 until reset. **A demo cannot depend on any hosted call.** That
+is why the deterministic path scores identically to the assisted one — it is the
+primary path, not a fallback.
+
+Image size also decides whether a vision call succeeds. The labelled plates are
+~29KB and answer reliably; the artwork averages 1.3MB (55 of 85 files over
+1.5MB) and failed until downscaled, so every image is resized to a 1024px edge
+before sending.
+
 ## Known limitations in what *is* built
+
+### Reasoning operations: what is covered, and what is not
+The planner selects operations from a registry keyed on question *shape* rather
+than on subject, so an unseen question in a known shape is planned the same way.
+Implemented and tested: direct lookup, multi-hop, inverse lookup, multi-fact
+decomposition, comparison, superlative/ranking, duration, date ordering, date
+difference, existence checks, percentage, ratio, difference, total, average,
+conflict detection, reliability ranking, and insufficient-evidence detection.
+
+Detected but **not separately executed**: cause-and-effect and impact analysis
+fall back to retrieval and report what the archive states, without constructing
+a causal chain. Timeline construction returns the dated events for a subject but
+does not narrate them. Entity tracing is limited to what a single relation
+records. A question needing one of these gets the evidence and an honest partial
+status, not a fabricated explanation.
+
+### Visual interpretation is a model's reading, never an archive fact
+A vision observation is labelled `partial_visual` and kept out of the fact store.
+It is a description of an image, produced by a model that can be wrong, and the
+UI shows it in its own section with the model named. It is never promoted to a
+recorded fact, never written back to the permanent index, and never presented as
+something the archive states.
+
+When vision is unavailable — no model configured, the daily cap spent, the image
+too large — the answer reports `partial_visual` and names the asset to open. That
+is deliberately *not* `insufficient_evidence`: the evidence exists and is
+identified; we could not read it. Blaming the archive for our blind spot would be
+the dishonest reading.
+
+### Query-time discoveries are not written back
+The prose reader and the chart reader recover values at query time. Those stay in
+the investigation's own memory and are **not** written to the fact store. The
+permanent index is a pure function of the read-only corpus, rebuildable by
+`scripts/build_indexes.py`, and keeping it that way is what guarantees an answer
+does not depend on which questions were asked before it.
+
+A reviewable learned-facts store is designed and **not implemented**. If it is
+added it must be a separate table with subject, predicate, value, evidence id,
+document path, line range, excerpt, extraction method, confidence, reliability,
+verification status, parser version, timestamp and review state — and inferred
+conclusions must never be stored in it as direct facts.
 
 ### The fact store is an index, not the evidence
 Every row in `facts` was extracted from a chunk and keeps that chunk's id, so a

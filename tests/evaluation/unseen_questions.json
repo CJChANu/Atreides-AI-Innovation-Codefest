@@ -1,0 +1,197 @@
+{
+  "_comment": "Held-out evaluation set. These questions were written from the archive's own records AFTER the retrieval and reasoning rules were implemented, and no rule was added or tuned to make any of them pass. They exist to measure general capability — whether an unseen judge question in a familiar *shape* is answered — rather than success on the questions we developed against. `expect` is a substring the answer must contain. `expect_status` constrains the completion state, so an honest refusal counts as a pass where the archive genuinely lacks the evidence. Categories map to the reasoning operations the system claims to support.",
+  "questions": [
+    {
+      "id": "u01",
+      "category": "direct_lookup",
+      "q": "What is the recorded garrison strength of Crookgate Keep?",
+      "expect": "6,970"
+    },
+    {
+      "id": "u02",
+      "category": "direct_lookup",
+      "q": "Which faction was victorious in the War of Endless Vigil?",
+      "expect": "Bleeding Crown"
+    },
+    {
+      "id": "u03",
+      "category": "direct_lookup",
+      "q": "What artifact class is the Thrice-Bound Lantern?",
+      "expect": "ward"
+    },
+    {
+      "id": "u04",
+      "category": "paraphrase",
+      "q": "How many souls stand under arms at Mournwatch?",
+      "expect": "6,254"
+    },
+    {
+      "id": "u05",
+      "category": "paraphrase",
+      "q": "Where does the Thorn Wraith make its home?",
+      "expect": "Ironfell Citadel"
+    },
+    {
+      "id": "u06",
+      "category": "figure_plate",
+      "q": "What threat rating is recorded for the Weeping Lurker?",
+      "expect": "3"
+    },
+    {
+      "id": "u07",
+      "category": "chart_plate",
+      "q": "What is the attunement cost of the Thrice-Bound Lantern?",
+      "expect": "55"
+    },
+    {
+      "id": "u08",
+      "category": "chart_plate",
+      "q": "What garrison strength does the Emberdeep plate record?",
+      "expect": "1,114"
+    },
+    {
+      "id": "u09",
+      "category": "cross_document",
+      "q": "In which year was the Cinder-Wrought Aegis forged?",
+      "expect": "354"
+    },
+    {
+      "id": "u10",
+      "category": "duration",
+      "q": "How long did the Winter Reckoning last?",
+      "expect": "13"
+    },
+    {
+      "id": "u11",
+      "category": "duration",
+      "q": "How long did the Purge of Blackport last?",
+      "expect": "10"
+    },
+    {
+      "id": "u12",
+      "category": "date_ordering",
+      "q": "Which began first, the Leaden Accord or the Winter Reckoning?",
+      "expect": "Winter Reckoning"
+    },
+    {
+      "id": "u13",
+      "category": "superlative",
+      "q": "Which conflict recorded the most casualties?",
+      "expect": "War of Endless Vigil"
+    },
+    {
+      "id": "u14",
+      "category": "superlative",
+      "q": "Which conflict recorded the fewest casualties?",
+      "expect": "Leaden Accord"
+    },
+    {
+      "id": "u15",
+      "category": "numeric_comparison",
+      "q": "Which has the larger garrison strength, Hollowreach or Greyfell Citadel?",
+      "expect": "Greyfell Citadel"
+    },
+    {
+      "id": "u16",
+      "category": "calculation_percentage",
+      "q": "What percentage of the War of Endless Vigil's casualties were the Winter Reckoning's casualties?",
+      "expect": "34"
+    },
+    {
+      "id": "u17",
+      "category": "calculation_difference",
+      "q": "What is the difference between the casualties of the Purge of Blackport and the War of Drowned Light?",
+      "expect": "6,290"
+    },
+    {
+      "id": "u18",
+      "category": "calculation_total",
+      "q": "What is the combined garrison strength of Crookgate Keep and Hollowreach?",
+      "expect": "8,276"
+    },
+    {
+      "id": "u19",
+      "category": "multi_fact",
+      "q": "What are the threat ratings of the Weeping Lurker and the Thorn Wraith?",
+      "expect": "9"
+    },
+    {
+      "id": "u20",
+      "category": "multi_fact",
+      "q": "Where and in which year was the Thrice-Bound Lantern forged?",
+      "expect": "Stormmarch"
+    },
+    {
+      "id": "u21",
+      "category": "multi_hop",
+      "q": "Who rules the place where the Marsh Revenant lairs?",
+      "expect": "Morvain"
+    },
+    {
+      "id": "u22",
+      "category": "temporal_reasoning",
+      "q": "Why would it be wrong to conclude that the Thrice-Bound Lantern was present at Cindermere Hold when it was devastated in 271 AS?",
+      "expect_status": [
+        "completed",
+        "partial_no_progress",
+        "insufficient_evidence"
+      ]
+    },
+    {
+      "id": "u23",
+      "category": "conflict",
+      "q": "In which year was Gloamreach truly founded?",
+      "expect": "246"
+    },
+    {
+      "id": "u24",
+      "category": "no_answer",
+      "q": "What is the attunement cost of Crookgate Keep?",
+      "expect_none": true
+    },
+    {
+      "id": "u25",
+      "category": "no_answer",
+      "q": "What is the threat rating of the Iron-Ring Cartel?",
+      "expect_none": true
+    },
+    {
+      "id": "u26",
+      "category": "no_answer",
+      "q": "How many airships does the Ashen Vanguard operate?",
+      "expect_none": true
+    },
+    {
+      "id": "u27",
+      "category": "visual_only",
+      "q": "What emblem appears on the banner of the Silent Choir?",
+      "expect_status": [
+        "partial_visual",
+        "insufficient_evidence",
+        "completed"
+      ]
+    },
+    {
+      "id": "u28",
+      "category": "unknown_entity",
+      "q": "What is the garrison strength of Aldermere Hold?",
+      "expect_none": true
+    },
+    {
+      "id": "u29",
+      "category": "location_events",
+      "q": "Which conflicts devastated Cindermere Hold?",
+      "expect_status": [
+        "completed",
+        "partial_no_progress",
+        "insufficient_evidence"
+      ]
+    },
+    {
+      "id": "u30",
+      "category": "direct_lookup",
+      "q": "In which region does Thorncairn lie?",
+      "expect": "Gloaming"
+    }
+  ]
+}

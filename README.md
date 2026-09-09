@@ -4,18 +4,38 @@
 Sub-track **1C — Searching the Way a Human Does** (primary), extended with
 **1B — Connecting Facts Across Thousands of Pages**.
 
-An archive investigator for the Ashen Era Archive: 339 files and ~1,330 pages of
-novels, wiki articles, codex data books, in-world ephemera, simulated scans and
-figure plates. It does not treat a question as one similarity search. It plans an
+A **provenance-first multimodal archive investigator** for the Ashen Era Archive:
+339 files and ~1,330 pages of novels, wiki articles, codex data books, in-world
+ephemera, simulated scans and figure plates.
+
+It is **not a database lookup tool** and **not a web search engine**. It plans an
 investigation, searches iteratively, expands connected entities across documents,
-verifies evidence, and answers with page-level citations, confidence, conflicts,
-and a visible trace of why it stopped.
+reasons over what it finds, and answers with page-level citations, the quoted
+source line, confidence, conflicts, and a visible record of why it stopped.
+
+**What is a retrieval aid, and what is evidence.** The fact store, knowledge
+graph, keyword index and vector index are *navigation*: they say where to look.
+Every row in them carries the chunk it was extracted from, and an answer follows
+that pointer back and quotes the original line. The archive's own documents,
+tables, figures and scans are the source of truth; the indexes are the map, not
+the territory.
 
 > **Status — the full path runs end to end: ingestion → four indexes → hybrid
-> retrieval → bounded investigation → verification → API and web UI.** It works
-> with **no API key at all**; adding one activates LLM assistance with no code
-> change. Vision analysis of chart and heraldry plates is the main remaining gap —
-> see [docs/limitations.md](docs/limitations.md) for exactly what that costs.
+> retrieval → bounded investigation → reasoning → verification → API and web UI.**
+> It works with **no API key at all**: entity matching, routing, retrieval, OCR,
+> chart reading, date reasoning and arithmetic are all deterministic, and the
+> measured accuracy is the same with the LLM switched off. Adding a key activates
+> LLM assistance with no code change; adding `AEA_VISION_MODEL` activates image
+> interpretation. See [docs/limitations.md](docs/limitations.md) for what each
+> costs and what remains unsolved.
+
+**Measured** — reproduce with the commands in [Test](#test):
+
+| Set | Score | What it measures |
+|---|---|---|
+| Held-out questions | **30 / 30** | general capability, written after the rules and never tuned against |
+| Team question set | **30 / 30** | regression on questions we developed against |
+| Supplied dev set (cited) | **15 / 20** | the 5 misses need artwork interpretation |
 
 ---
 
@@ -243,17 +263,42 @@ to open and marks the answer PARTIAL — see
 pytest
 ```
 
-133 tests, in four groups:
+320 tests, in four groups:
 
 - **unit** — the rules citations depend on: ID stability, provenance inheritance,
   table integrity, conflict normalisation, confidence bounds, schema validation,
-  and the guards that stop LLM output overruling the index.
+  attribute→source routing, operation detection, date reasoning, chart-plate
+  geometry, prose extraction, excerpt quoting, completion status, and the guards
+  that stop LLM output overruling the index.
 - **integration** — the real pipeline, the real loop and the real HTTP API:
-  every claim names a chunk that exists, the loop respects its budget, an
-  unanswerable question is never reported as supported.
+  every claim names a chunk that exists, every citation opens, the loop respects
+  its budget, an unanswerable question is never reported as supported, and no
+  evidence leaks between investigations.
 - **failure_modes** — the fallback matrix: retries, rate limits, non-retryable
-  4xx, circuit opening and closing, corrupt cache entries, unconfigured gateway.
+  4xx, circuit opening and closing, corrupt cache entries, unconfigured gateway,
+  and vision degrading to an honest status rather than a guess.
 - **evaluation** — the paraphrase probe backing the weight measurement.
+
+### Measuring general capability
+
+The suite above proves the system still does what it did yesterday. It cannot
+show whether an *unseen* question will be answered, and the judge's questions are
+unseen by definition — so there is a second set, written from the archive after
+the rules were implemented and never tuned against:
+
+```bash
+python scripts/run_unseen_eval.py --no-llm
+```
+
+It scores per reasoning operation rather than in aggregate, because a category at
+0/3 means a whole capability is missing and a total would hide it. Current result
+is **30/30**, and the same **30/30** with the LLM disabled — the deterministic
+path is not a degraded mode.
+
+```bash
+python scripts/run_eval.py            # ablation on the supplied dev questions
+python scripts/run_retrieval_eval.py  # what semantic retrieval adds
+```
 
 ---
 
