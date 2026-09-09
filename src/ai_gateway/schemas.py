@@ -144,3 +144,16 @@ def validate_extracted_claims(payload: dict[str, Any]) -> list[dict[str, str]]:
             "evidence_id": evidence_id.strip(),
         })
     return claims
+
+
+def validate_answer_synthesis(payload: dict[str, Any]) -> dict[str, Any]:
+    """Contract for evidence-grounded natural-language synthesis.
+
+    The model may compose prose, but it must return cited source ids and must not
+    claim to use anything outside the supplied passages.
+    """
+    answer = payload.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        raise SchemaViolation("'answer' must be a non-empty string")
+    used = _string_list(payload.get("used_evidence_ids"), field="used_evidence_ids", limit=12)
+    return {"answer": answer.strip(), "used_evidence_ids": used}

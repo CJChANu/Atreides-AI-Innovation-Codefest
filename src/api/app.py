@@ -41,6 +41,27 @@ UI_PATH = STATIC_DIR / "index.html"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def _synthesis_passages(state, store) -> list[tuple[str, str, str]]:
+    """Return retrieved chunks as labelled evidence for LLM prose synthesis."""
+    chunk_ids: list[str] = []
+    for iteration in state.iterations:
+        for chunk_id in iteration.retrieved_chunks:
+            if chunk_id.startswith("doc-") and "-figure-" not in chunk_id and chunk_id not in chunk_ids:
+                chunk_ids.append(chunk_id)
+    passages: list[tuple[str, str, str]] = []
+    for index, chunk_id in enumerate(chunk_ids[:10], start=1):
+        row = store.get_chunk(chunk_id)
+        if row is None:
+            continue
+        doc = store.get_document(row["document_id"])
+        if doc is None:
+            continue
+        page = f", p.{row['page_start']}" if row["page_start"] is not None else ""
+        label = f"{doc['title']} ({doc['source_class']}/{doc['source_format']}{page})"
+        passages.append((f"E{index}", label, row["content"]))
+    return passages
+
+
 def _store() -> ArchiveStore:
     if not SETTINGS.db_path.exists():
         raise HTTPException(503, "index not built — run scripts/ingest_archive.py")
@@ -95,6 +116,21 @@ def ask(request: AskRequest) -> AskResponse:
         state = investigator.investigate(request.question)
         response = to_response(state, store, FactQuery(store).title_of,
                                gateway.fallback_events)
+        # Open comparison / explanation questions often retrieve good evidence but
+        # have no single structured value. When LLM is allowed, synthesize a
+        # concise answer from those retrieved passages, with inline evidence ids.
+        if (request.options.allow_llm and response.partial
+                and response.answer.startswith("No recorded value answers this directly")):
+            synthesized = gateway.synthesize_answer(
+                request.question, _synthesis_passages(state, store)
+            )
+            if synthesized:
+                response.answer = synthesized["answer"]
+                response.partial = False
+                response.evidence_chain = [
+                    f"LLM synthesis used {eid}" for eid in synthesized.get("used_evidence_ids", [])
+                ]
+                response.stats["synthesis"] = "llm_grounded_passages"
         if not request.options.show_trace:
             response.trace = []
         return response

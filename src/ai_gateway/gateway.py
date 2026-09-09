@@ -40,6 +40,7 @@ from src.ai_gateway.schemas import (
     validate_extracted_claims,
     validate_query_suggestions,
     validate_question_understanding,
+    validate_answer_synthesis,
 )
 from src.common.config import Settings
 
@@ -83,6 +84,22 @@ Rules:
 Looking for: {gap}
 
 Passages:
+{passages}"""
+
+SYNTHESIS_PROMPT = """Write a concise natural-language answer to a question about a fictional archive.
+Return ONLY JSON: {"answer":"...", "used_evidence_ids":["..."]}
+
+Rules:
+- Use ONLY the supplied evidence passages.
+- If sources differ, explain the difference instead of hiding it.
+- Mention source types naturally when useful, e.g. wiki, codex, scanned document, image plate.
+- Cite evidence inline with bracket ids, for example [E1].
+- Do not invent facts that are not in the evidence.
+- If the evidence is only related but not enough, say exactly what is missing.
+
+Question: {question}
+
+Evidence passages:
 {passages}"""
 
 
@@ -189,6 +206,33 @@ class AIGateway:
                   .replace("{gap}", gap)
                   .replace("{passages}", rendered))
         return self._json_call("claim_extraction", prompt, validate_extracted_claims)
+
+
+    def synthesize_answer(self, question: str, passages: list[tuple[str, str, str]]) -> dict[str, Any] | None:
+        """Compose a grounded prose answer from retrieved passages.
+
+        Each passage is (evidence_id, citation_label, text). The response is still
+        quarantined by schema and the caller only uses it when the cited ids are
+        among the supplied evidence ids.
+        """
+        if not passages:
+            return None
+        rendered = "\n\n".join(
+            f"[{eid}] {label}: {' '.join(text.split())[:1000]}"
+            for eid, label, text in passages[:10]
+        )
+        prompt = (SYNTHESIS_PROMPT
+                  .replace("{question}", question)
+                  .replace("{passages}", rendered))
+        result = self._json_call("answer_synthesis", prompt, validate_answer_synthesis)
+        if not result:
+            return None
+        allowed = {eid for eid, _, _ in passages}
+        used = [eid for eid in result.get("used_evidence_ids", []) if eid in allowed]
+        if not used:
+            answer = result.get("answer", "")
+            used = [eid for eid in allowed if f"[{eid}]" in answer]
+        return {"answer": result["answer"], "used_evidence_ids": used}
 
     # -- transport ----------------------------------------------------------
 
