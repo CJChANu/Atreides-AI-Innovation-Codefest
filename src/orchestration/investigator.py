@@ -20,6 +20,7 @@ Three properties matter more than cleverness here:
 
 from __future__ import annotations
 
+import re
 import time
 
 from src.common.config import InvestigationBudget
@@ -27,7 +28,7 @@ from src.common.provenance import reliability_of
 from src.graph.fact_query import AttributeView, FactQuery, FactRow
 from src.graph.fact_query import _to_fact as _fact_row
 from src.graph.facts import numeric_value
-from src.graph.plate_facts import is_figure_attribute
+from src.graph.plate_facts import is_figure_attribute, routes_to_figure
 from src.graph.prose_facts import extract as prose_extract
 from src.graph.prose_facts import search_queries as prose_queries
 from src.graph.query import GraphQuery
@@ -35,8 +36,11 @@ from src.graph.timeline import Timeline
 from src.reasoning.temporal import (
     CUSTODY_ATTRIBUTES,
     ORIGIN_ATTRIBUTES,
+    Span,
     TemporalVerdict,
     check_anachronism,
+    describe_ordering,
+    order_by_year,
     parse_year,
 )
 from src.orchestration.planner import decompose, next_action
@@ -67,6 +71,10 @@ TEXT_HITS = 6
 # is item two of a contract concerning a different relic — so it ranks below the
 # subject's own pages and is missed at the usual depth.
 PROSE_HITS = 12
+
+# "Least", "smallest", "fewest" invert a superlative. Without this, a question
+# asking which conflict was *least* costly is answered with the most costly one.
+_LEAST = re.compile(r"\b(least|lowest|smallest|fewest|weakest|shortest)\b", re.IGNORECASE)
 
 # Relations the archive records from one side only. Reading the stored row from
 # the other end is the same assertion, so a lookup may fall back to the inverse.
@@ -116,7 +124,8 @@ def _format_result(kind: str, result: float) -> str:
 
 class Investigator:
     def __init__(self, store: ArchiveStore, budget: InvestigationBudget, *,
-                 gateway=None, retriever: HybridRetriever | None = None) -> None:
+                 gateway=None, retriever: HybridRetriever | None = None,
+                 vision=None) -> None:
         self.store = store
         self.budget = budget
         self.analyzer = QuestionAnalyzer(store)
@@ -129,6 +138,8 @@ class Investigator:
         # was before — which is the fallback mode, not a degraded special case.
         self.gateway = gateway
         self.retriever = retriever
+        # Optional. Absent, figures are reported as unreadable rather than guessed.
+        self.vision = vision
 
     @property
     def llm_available(self) -> bool:
@@ -161,7 +172,11 @@ class Investigator:
         state.assist_notes = state_notes
         state.ai_mode = "llm_assisted" if self.llm_available else "deterministic"
 
-        if not question.entities and question.intent is not Intent.INVERSE_HOP:
+        # A superlative legitimately names no entity — "which conflict had the
+        # most casualties" gets its candidates from the archive, not the question
+        # — so it must not be turned away by the no-entity guard.
+        needs_entity = question.intent not in {Intent.INVERSE_HOP, Intent.ANALYSIS}
+        if not question.entities and needs_entity:
             # Nothing in the question matches anything we indexed. Say so rather
             # than running six iterations that cannot succeed.
             self._text_fallback(state, question.text)
@@ -306,6 +321,8 @@ class Investigator:
             "relation_check": self._act_relation_check,
             "temporal_compare": self._act_temporal_compare,
             "assemble": self._act_assemble,
+            "aggregate_scan": self._act_aggregate_scan,
+            "analyse": self._act_analyse,
             "compute": self._act_compute,
             "report_gap": self._act_report_gap,
             "inverse_lookup": self._act_inverse_lookup,
@@ -582,6 +599,166 @@ class Investigator:
             page=getattr(hit, "page", None), source_class=hit.source_class,
             reliability=reliability_of(hit.source_class),
         )
+
+    def _act_aggregate_scan(self, question, step, state, iteration, learned) -> bool:
+        """Gather every recorded value of one attribute, across the whole archive.
+
+        A superlative names no subject — "which conflict had the most casualties"
+        — so the candidates cannot come from the question. They come from the
+        fact store, which is exactly the navigational use it is for: it tells us
+        which subjects to look at, and each row still carries the chunk that
+        justifies it.
+        """
+        attribute = question.analysis.split(":", 1)[1] if ":" in question.analysis else ""
+        if not attribute:
+            step.fail("no attribute to aggregate")
+            return False
+        iteration.retrieval_modes = ["facts"]
+
+        rows = self.store.connection.execute(
+            """SELECT * FROM facts
+               WHERE attribute = ? AND value_number IS NOT NULL
+               ORDER BY value_number DESC""",
+            (attribute,),
+        ).fetchall()
+        if not rows:
+            step.fail(f"no subject records a {attribute.replace('_', ' ')}")
+            return False
+
+        # One row per subject: the most reliable value each subject records.
+        best: dict[str, FactRow] = {}
+        for row in rows:
+            fact = _fact_row(row)
+            held = best.get(fact.subject_id)
+            if held is None or fact.reliability > held.reliability:
+                best[fact.subject_id] = fact
+        candidates = sorted(best.values(), key=lambda f: f.value_number or 0, reverse=True)
+
+        learned["candidates"] = candidates
+        iteration.new_claims = [
+            f"{fact.subject_name} · {attribute} = {fact.value_text}"
+            for fact in candidates[:5]
+        ]
+        step.satisfy(candidates[:5],
+                     f"{len(candidates)} subject(s) record a {attribute.replace('_', ' ')}")
+        return True
+
+    def _act_analyse(self, question, step, state, iteration, learned) -> bool:
+        """Apply the question's operation to the values gathered for it."""
+        iteration.retrieval_modes = ["arithmetic"]
+        kind = question.analysis
+
+        if kind.startswith("superlative:"):
+            return self._analyse_superlative(question, step, state, iteration, learned)
+        if kind == "duration":
+            return self._analyse_duration(question, step, state, iteration)
+        if kind == "ordering":
+            return self._analyse_ordering(question, step, state, iteration)
+        if kind == "comparison":
+            return self._analyse_comparison(question, step, state, iteration)
+        step.fail(f"no handler for analysis {kind!r}")
+        return False
+
+    def _analyse_superlative(self, question, step, state, iteration, learned) -> bool:
+        attribute = question.analysis.split(":", 1)[1]
+        candidates = learned.get("candidates") or []
+        if not candidates:
+            step.fail("nothing to rank")
+            return False
+        wants_least = bool(_LEAST.search(question.text))
+        ordered = sorted(candidates, key=lambda f: f.value_number or 0,
+                         reverse=not wants_least)
+        winner = ordered[0]
+        ranked = ", ".join(f"{f.subject_name} {f.value_text}" for f in ordered[:5])
+        state.answer_value = f"{winner.subject_name} ({winner.value_text})"
+        state.computation = {
+            "kind": "superlative", "attribute": attribute,
+            "formula": f"{'lowest' if wants_least else 'highest'} recorded "
+                       f"{attribute.replace('_', ' ')}",
+            "operands": [
+                {"subject": f.subject_name, "attribute": attribute,
+                 "value": f.value_number, "value_text": f.value_text, "grounded": True}
+                for f in ordered[:5]
+            ],
+            "result": winner.value_number, "result_text": state.answer_value,
+        }
+        iteration.new_claims = [f"ranked: {ranked}"]
+        state.evidence_chain.append(
+            f"Ranked {len(candidates)} recorded values; "
+            f"{'lowest' if wants_least else 'highest'} is {winner.subject_name}")
+        step.satisfy(ordered[:3], f"{winner.subject_name} = {winner.value_text}")
+        return True
+
+    def _analyse_duration(self, question, step, state, iteration) -> bool:
+        start, end = question.operands[0], question.operands[1]
+        first, last = parse_year(start.value_text), parse_year(end.value_text)
+        if first is None or last is None:
+            step.fail("a start or end year could not be read as a year")
+            return False
+        span = Span(label=start.subject_name, start=first, end=last)
+        state.answer_value = f"{span.duration} years ({first} AS to {last} AS)"
+        state.computation = {
+            "kind": "duration", "formula": f"{last} AS − {first} AS",
+            "operands": [
+                {"subject": o.subject_name, "attribute": o.attribute,
+                 "value": parse_year(o.value_text), "value_text": o.value_text,
+                 "grounded": True} for o in question.operands
+            ],
+            "result": span.duration, "result_text": state.answer_value,
+        }
+        iteration.new_claims = [span.describe()]
+        state.evidence_chain.append(f"Computed: {last} AS − {first} AS = {span.duration} years")
+        step.satisfy([row for o in question.operands for row in o.evidence], span.describe())
+        return True
+
+    def _analyse_ordering(self, question, step, state, iteration) -> bool:
+        items = [(o.subject_name, parse_year(o.value_text)) for o in question.operands]
+        dated = [(name, year) for name, year in items if year is not None]
+        if len(dated) < 2:
+            step.fail("fewer than two of the values are years")
+            return False
+        ordered = order_by_year(dated)
+        state.answer_value = f"{ordered[0][0]} — {describe_ordering(dated)}"
+        state.computation = {
+            "kind": "ordering", "formula": "earliest first",
+            "operands": [
+                {"subject": name, "attribute": question.operands[0].attribute,
+                 "value": year, "value_text": f"{year} AS", "grounded": True}
+                for name, year in ordered
+            ],
+            "result": ordered[0][1], "result_text": state.answer_value,
+        }
+        iteration.new_claims = [describe_ordering(dated)]
+        state.evidence_chain.append(f"Ordered by year: {describe_ordering(dated)}")
+        step.satisfy([row for o in question.operands for row in o.evidence],
+                     f"earliest is {ordered[0][0]}")
+        return True
+
+    def _analyse_comparison(self, question, step, state, iteration) -> bool:
+        values = [(o.subject_name, o.value, o.value_text) for o in question.operands]
+        usable = [(name, value, text) for name, value, text in values if value is not None]
+        if len(usable) < 2:
+            step.fail("fewer than two of the values are numbers")
+            return False
+        ordered = sorted(usable, key=lambda item: item[1], reverse=True)
+        top, rest = ordered[0], ordered[1]
+        attribute = question.operands[0].attribute.replace("_", " ")
+        state.answer_value = (
+            f"{top[0]} ({top[2]}) — larger than {rest[0]} ({rest[2]}) "
+            f"by {top[1] - rest[1]:,.0f}")
+        state.computation = {
+            "kind": "comparison", "formula": f"{top[0]} {attribute} vs {rest[0]} {attribute}",
+            "operands": [
+                {"subject": name, "attribute": question.operands[0].attribute,
+                 "value": value, "value_text": text, "grounded": True}
+                for name, value, text in ordered
+            ],
+            "result": top[1] - rest[1], "result_text": state.answer_value,
+        }
+        iteration.new_claims = [state.answer_value]
+        state.evidence_chain.append(f"Compared: {state.answer_value}")
+        step.satisfy([row for o in question.operands for row in o.evidence], state.answer_value)
+        return True
 
     def _act_assemble(self, question, step, state, iteration, learned) -> bool:
         """Report every requested fact together, once each one is established."""
@@ -987,7 +1164,7 @@ class Investigator:
         going to answer them, and it buries the fact that the value is a text
         lookup that failed.
         """
-        if not is_figure_attribute(attribute):
+        if not routes_to_figure(attribute):
             return False
         primary = question.primary
         if primary is None:
@@ -1009,6 +1186,28 @@ class Investigator:
             state.answer_value = f"see figure: {' '.join(hit.ocr_text.split())[:80]}"
             step.satisfy([], f"value found on plate {hit.figure_id}")
             return True
+
+        # Found the plate, cannot read the value off it by OCR. Before reporting
+        # that, try actually looking at it: the archive's artwork carries answers
+        # that no text route can reach, and "we could not read it" is only honest
+        # once every route including sight has been attempted.
+        if hit.pictorial and self.vision is not None and self.vision.available:
+            observation = self.vision.describe(hit.figure_id, hit.asset_path,
+                                               question.text)
+            iteration.retrieval_modes.append("vision")
+            state.visual_observations.append(observation.to_dict())
+            if observation.usable:
+                iteration.new_claims.append(
+                    f"{hit.caption}: {observation.description[:200]}")
+                state.evidence_chain.append(
+                    f"{hit.caption} — visual reading: {observation.description[:160]}")
+                state.answer_value = observation.description
+                state.visual_gaps.append(
+                    f"{hit.caption} was read by a vision model, not stated in text")
+                step.satisfy([], f"visual observation of {hit.figure_id} "
+                                 f"({observation.status.value})")
+                return True
+            state.visual_gaps.append(f"{hit.caption}: {observation.note}")
 
         # Found the plate, cannot read the value off it. Naming the plate and the
         # reason is far more useful than reporting "None recorded" as the answer —

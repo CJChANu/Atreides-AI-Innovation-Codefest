@@ -60,6 +60,34 @@ def decompose(question: Question) -> list[SubQuestion]:
         ))
         return subs
 
+    if question.intent is Intent.ANALYSIS:
+        # A superlative names no subject: the candidates come from the archive,
+        # so there are no operands to gather first.
+        if question.analysis.startswith("superlative:"):
+            attribute = question.analysis.split(":", 1)[1].replace("_", " ")
+            return [
+                SubQuestion("aggregate", f"Which subjects record a {attribute}?",
+                            f"every recorded {attribute} in the archive, with citations"),
+                SubQuestion("analyse", f"Which of them is the extreme?",
+                            "the ranked values, and the answer that follows"),
+            ]
+
+        subs = [
+            SubQuestion(f"operand:{index}",
+                        f"What {operand.attribute.replace('_', ' ')} is recorded "
+                        f"for {operand.subject_name}?",
+                        f"a recorded value for {operand.attribute.replace('_', ' ')} "
+                        f"on {operand.subject_name}, with a citation")
+            for index, operand in enumerate(question.operands)
+        ]
+        subs.append(SubQuestion(
+            "analyse", f"What does the {question.analysis} of those values show?",
+            "every input established, and the operation performed over them"))
+        subs.append(SubQuestion(
+            "conflict", "Do sources disagree about any input?",
+            "competing values checked for each input"))
+        return subs
+
     if question.intent is Intent.TEMPORAL_CHECK:
         subject = question.entities[0][1] if question.entities else "the subject"
         place = question.entities[1][1] if len(question.entities) > 1 else "the place"
@@ -148,6 +176,22 @@ def next_action(question: Question, pending: list[SubQuestion], learned: dict) -
     step = pending[0]
     primary = question.primary
     name = primary[1] if primary else question.text
+
+    if step.key == "aggregate":
+        attribute = question.analysis.split(":", 1)[1] if ":" in question.analysis else ""
+        return ("aggregate_scan", attribute.replace("_", " "),
+                f"no subject is named, so the candidates are every subject the "
+                f"archive records a {attribute.replace('_', ' ')} for")
+
+    if step.key == "analyse":
+        missing = question.ungrounded_operands
+        if missing:
+            return ("report_gap", ", ".join(o.describe() for o in missing),
+                    f"the {question.analysis} needs every input; "
+                    f"{len(missing)} is still missing")
+        return ("analyse", question.analysis,
+                f"every input is established, so the {question.analysis} can be "
+                f"performed and shown")
 
     if step.key == "origin":
         return ("origin_lookup", name,

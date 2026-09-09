@@ -134,6 +134,55 @@ def check_anachronism(subject: str, subject_attribute: str, subject_year: int,
                        event_place=event_place, event_year=event_year)
 
 
+@dataclass(frozen=True)
+class Span:
+    """A dated interval, e.g. a war from its start year to its end year."""
+
+    label: str
+    start: int
+    end: int | None = None
+
+    @property
+    def duration(self) -> int | None:
+        return None if self.end is None else self.end - self.start
+
+    def describe(self) -> str:
+        if self.end is None:
+            return f"{self.label}: began {self.start} AS (no end recorded)"
+        return (f"{self.label}: {self.start} AS to {self.end} AS "
+                f"({self.duration} years)")
+
+
+def order_by_year(items: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Dated items, earliest first. The basis of every ordering question."""
+    return sorted(items, key=lambda item: item[1])
+
+
+def describe_ordering(items: list[tuple[str, int]]) -> str:
+    """'A (225 AS), then B (227 AS), then C (320 AS)'."""
+    ordered = order_by_year(items)
+    if not ordered:
+        return ""
+    parts = [f"{label} ({year} AS)" for label, year in ordered]
+    return parts[0] if len(parts) == 1 else ", then ".join(parts)
+
+
+def years_between(first: int, second: int) -> int:
+    """Absolute gap in years. Direction is stated separately, in words."""
+    return abs(second - first)
+
+
+def overlaps(first: Span, second: Span) -> bool | None:
+    """Whether two spans overlap, or None when a needed end date is missing.
+
+    Returning None rather than False matters: "we cannot tell" and "they do not
+    overlap" are different answers, and only one of them is a finding.
+    """
+    if first.end is None or second.end is None:
+        return None
+    return first.start <= second.end and second.start <= first.end
+
+
 @dataclass
 class TemporalVerdict:
     """The reasoned answer to a presence-at-an-event question."""

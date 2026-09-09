@@ -17,6 +17,8 @@ import re
 
 from src.graph.entities import normalise
 from src.orchestration.state import Calculation, Intent, Operand, Question
+from src.reasoning.operations import OperationKind
+from src.reasoning.operations import detect as detect_operations
 from src.storage.db import ArchiveStore
 
 # Phrases that name an attribute in the fact store. Ordered longest-first at match
@@ -53,6 +55,12 @@ ATTRIBUTE_PHRASES: dict[str, str] = {
     "troops": "garrison_strength", "soldiers": "garrison_strength",
     "how many men": "garrison_strength", "strength of the garrison": "garrison_strength",
     "came out on top": "victor", "prevailed": "victor", "triumphed": "victor",
+    "victorious": "victor", "was victorious": "victor",
+    # The archive's own plate wording. A question that quotes the source's
+    # phrasing back at us should never be the one that misses.
+    "under arms": "garrison_strength", "souls under arms": "garrison_strength",
+    "stand under arms": "garrison_strength", "souls lost": "recorded_casualties",
+    "make its home": "lair", "make their home": "lair", "makes home": "lair",
     "makes its home": "lair", "makes their home": "lair", "nests": "lair",
     "dwells": "lair", "lives": "lair", "home of": "lair",
     "begin": "began", "started": "began", "broke out": "began",
@@ -322,6 +330,86 @@ class QuestionAnalyzer:
                 return kind
         return None
 
+    def _analysis_for(self, text: str, entities, operations):
+        """Build an analytic plan when the question asks for one.
+
+        Returns ``(kind, requirements)`` or None. Each branch answers the same
+        two questions — what operation, over which values — without ever naming
+        a particular entity or attribute, so an unseen question in the same
+        shape is planned identically.
+        """
+        kinds = {operation.kind for operation in operations}
+
+        # "How long did X last" — the span between two dated attributes on one
+        # subject. The archive states these as `began` and `ended`.
+        if OperationKind.DURATION in kinds and entities:
+            subject_id, name = entities[0][0]
+            return "duration", [
+                Operand(subject_id=subject_id, subject_name=name, attribute="began"),
+                Operand(subject_id=subject_id, subject_name=name, attribute="ended"),
+            ]
+
+        # "Which came first" — one date per named subject, then ordered.
+        if OperationKind.DATE_ORDERING in kinds and len(entities) >= 2:
+            attribute = self._sole_attribute(text, TIME_ATTRS) or "began"
+            return "ordering", [
+                Operand(subject_id=subject_id, subject_name=name, attribute=attribute)
+                for (subject_id, name), _, _ in entities
+            ]
+
+        # "Which is larger" — one numeric value per named subject, then compared.
+        if OperationKind.NUMERIC_COMPARISON in kinds and len(entities) >= 2:
+            attribute = self._sole_attribute(text, NUMERIC_ATTRIBUTES)
+            if attribute:
+                return "comparison", [
+                    Operand(subject_id=subject_id, subject_name=name,
+                            attribute=attribute, must_be_numeric=True)
+                    for (subject_id, name), _, _ in entities
+                ]
+
+        # "Which conflict had the most casualties" — no subject is named, so the
+        # candidates come from the archive itself. That is an aggregate over an
+        # attribute, not a lookup, and it is the shape most likely to appear in
+        # an unseen question about superlatives.
+        if OperationKind.SORTING in kinds and len(entities) <= 1:
+            attribute = self._sole_attribute(text, NUMERIC_ATTRIBUTES)
+            if attribute:
+                return f"superlative:{attribute}", []
+        return None
+
+    @staticmethod
+    def _sole_attribute(text: str, allowed: set[str]) -> str | None:
+        """The single attribute of the allowed kind this question mentions."""
+        found = {attribute for attribute, _, _ in
+                 QuestionAnalyzer.locate_attributes_static(text)
+                 if attribute in allowed}
+        return next(iter(found)) if len(found) == 1 else None
+
+    @staticmethod
+    def locate_attributes_static(text: str) -> list[tuple[str, int, int]]:
+        """Attribute spans without needing an index — used by the analytic planner."""
+        lowered = text.lower()
+        consumed = [False] * len(lowered)
+        found: list[tuple[str, int, int]] = []
+        for phrase in sorted(ATTRIBUTE_PHRASES, key=len, reverse=True):
+            attribute = ATTRIBUTE_PHRASES[phrase]
+            start = lowered.find(phrase)
+            while start >= 0:
+                end = start + len(phrase)
+                before_ok = start == 0 or not lowered[start - 1].isalnum()
+                after_ok = end >= len(lowered) or not lowered[end].isalnum()
+                if not after_ok and lowered[end] == "s":
+                    nxt = end + 1
+                    if nxt >= len(lowered) or not lowered[nxt].isalnum():
+                        after_ok, end = True, nxt
+                if before_ok and after_ok and not any(consumed[start:end]):
+                    for index in range(start, end):
+                        consumed[index] = True
+                    found.append((attribute, start, end))
+                start = lowered.find(phrase, end if after_ok else start + 1)
+        found.sort(key=lambda item: item[1])
+        return found
+
     def _corrected_attributes(self, text: str) -> list[tuple[str, int, int]]:
         """Attribute spans, with place/time siblings resolved from the question.
 
@@ -479,14 +567,27 @@ class QuestionAnalyzer:
         if not calculation.is_pairwise or len(operands) < 2:
             return calculation
 
-        # When both operands carry the *same* attribute the cue word cannot tell
-        # them apart ("the ratio of the threat rating of A to that of B" puts
-        # "of" before both). Source order is the reading a person would take.
-        if len({operand.attribute for operand in operands}) < 2:
-            return calculation
-
         cue = _DENOMINATOR_CUE.search(text)
         if cue is None:
+            return calculation
+
+        # When both operands carry the same attribute — "what percentage of A's
+        # casualties were B's casualties" — the attribute cannot distinguish
+        # them, but the *subjects* still can: the one named right after "of" is
+        # the denominator. Falling back to source order here inverts the answer,
+        # which is worse than refusing, because 291% and 34% are both plausible
+        # numbers and only one is right.
+        if len({operand.attribute for operand in operands}) < 2:
+            lowered = text.lower()
+            after_cue = [
+                (lowered.find(operand.subject_name.lower(), cue.end()), index)
+                for index, operand in enumerate(operands)
+            ]
+            named = sorted((pos, index) for pos, index in after_cue if pos >= 0)
+            if named:
+                calculation.denominator = named[0][1]
+                if len(operands) == 2:
+                    calculation.numerator = 1 - named[0][1]
             return calculation
 
         # Which attribute phrase is the first one after the cue word?
@@ -502,16 +603,35 @@ class QuestionAnalyzer:
                 break
         return calculation
 
+    # "Which faction ...?" names the *answer's type*, not a relation to traverse.
+    # Treating it as a bridge turns "which faction won the war" into "the faction
+    # of the war, then its victor" and answers with whoever that hop lands on.
+    _ANSWER_TYPE_OPENER = re.compile(
+        r"^\s*(which|what|who|whose)\s+(faction|organisation|organization|house|order)\b",
+        re.IGNORECASE)
+
     @staticmethod
     def match_bridge(text: str) -> str | None:
+        opens_with_type = QuestionAnalyzer._ANSWER_TYPE_OPENER.match(text)
         for pattern, attribute in BRIDGE_PATTERNS:
-            if pattern.search(text):
-                return attribute
+            if not pattern.search(text):
+                continue
+            # "Which faction ...?" opens by naming the answer's *type*. That is a
+            # hop only when the question also states the membership relation
+            # itself — "which faction is X a member of, and where is it seated"
+            # traverses, while "which faction was victorious at Y" does not. The
+            # relation phrase is the discriminator; the noun alone is not.
+            if opens_with_type and attribute == "member_of" and not re.search(
+                    r"\b(member\s+of|belongs?\s+to|membership|of\s+which|"
+                    r"that\s+\w+\s+(joined|serves))\b", text, re.IGNORECASE):
+                continue
+            return attribute
         return None
 
     # -- assembly -----------------------------------------------------------
 
     def analyze(self, text: str) -> Question:
+        operations = detect_operations(text).operations
         entities = self.match_entities(text)
         bridge = self.match_bridge(text)
         attribute = self.match_attribute(text, exclude=bridge)
@@ -543,7 +663,23 @@ class QuestionAnalyzer:
                 attribute=attribute, bridge_attribute=None, answer_type="number",
                 expects_conflict=expects_conflict,
                 filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
-                operands=operands, calculation=calculation,
+                operands=operands, calculation=calculation, operations=operations,
+            )
+
+        # Analytic shapes: several values, then one operation over them. These
+        # reuse the operand machinery — find every input, refuse until they are
+        # all grounded — and differ only in what is done with the inputs. Keeping
+        # them generic is the point: "how long did it last" is one operation
+        # whether the subject is a war, a reign or a quarantine.
+        analysis = self._analysis_for(text, self.locate_entities(text), operations)
+        if analysis is not None:
+            kind, requirements = analysis
+            return Question(
+                text=text, intent=Intent.ANALYSIS, entities=entities,
+                attribute=attribute, answer_type="value",
+                expects_conflict=expects_conflict,
+                filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
+                operands=requirements, analysis=kind, operations=operations,
             )
 
         # A question about whether a claim *follows* is not a lookup at all: no
@@ -556,6 +692,7 @@ class QuestionAnalyzer:
                 attribute=attribute, answer_type="explanation",
                 expects_conflict=expects_conflict,
                 filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
+                operations=operations,
             )
 
         # A question asking for several distinct facts is several questions. This
@@ -570,7 +707,7 @@ class QuestionAnalyzer:
                     attribute=attribute, answer_type=self._answer_type(text, attribute),
                     expects_conflict=expects_conflict,
                     filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
-                    operands=requirements,
+                    operands=requirements, operations=operations,
                 )
 
         if bridge and attribute and attribute != bridge:
@@ -596,6 +733,7 @@ class QuestionAnalyzer:
             answer_type=self._answer_type(text, attribute),
             expects_conflict=expects_conflict,
             filter_terms=sorted(FILTER_WORDS & set(re.findall(r"[a-z]+", text.lower()))),
+            operations=operations,
         )
 
     @staticmethod

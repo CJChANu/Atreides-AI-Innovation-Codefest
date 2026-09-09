@@ -24,6 +24,7 @@ class Intent(str, Enum):
     INVERSE_HOP = "inverse_hop"                  # "which faction has X as a member"
     CALCULATION = "calculation"                  # "what percentage of X's a is Y's b"
     MULTI_FACT = "multi_fact"                    # "where and when was X forged, and where is it housed"
+    ANALYSIS = "analysis"                        # duration, ordering, comparison, superlative
     TEMPORAL_CHECK = "temporal_check"            # "why would it be wrong to say X was at Y when Y fell"
     OPEN_QUESTION = "open_question"              # anything else; falls back to text search
 
@@ -238,6 +239,14 @@ class Question:
     # Set only for Intent.CALCULATION.
     operands: list[Operand] = field(default_factory=list)
     calculation: Calculation | None = None
+    # Which reasoning operations the question asks for, detected from its wording
+    # rather than from what it is about. The intent decides the plan's shape; this
+    # records everything the question needs, including operations the chosen
+    # intent does not itself cover, so the trace can show what was and was not
+    # attempted.
+    operations: list[Any] = field(default_factory=list)
+    # For Intent.ANALYSIS: which operation to apply once the operands are in.
+    analysis: str = ""
 
     @property
     def primary(self) -> tuple[str, str] | None:
@@ -271,6 +280,14 @@ class Investigation:
     # with the fact's value; a reverse lookup answers with its subject. Recording
     # it explicitly beats re-deriving it from the rendered evidence chain.
     answer_value: str = ""
+    # Visual evidence that was required but could not be fully read. Recorded so
+    # completion can distinguish "the archive lacks this" from "we could not see
+    # it", which are different problems with different fixes.
+    visual_gaps: list[str] = field(default_factory=list)
+    # What a vision model reported about each figure it was shown. Kept separate
+    # from claims: a model's reading of a painting is an observation about an
+    # image, not a fact the archive states.
+    visual_observations: list[dict[str, Any]] = field(default_factory=list)
     # For a calculation: the formula, the operands it consumed, and the result.
     # Recorded rather than re-derived so the arithmetic in the answer and the
     # arithmetic in the trace cannot disagree.
@@ -300,6 +317,10 @@ class Investigation:
             "answer": self.answer_value,
             "intent": self.question.intent.value,
             "entities": [name for _, name in self.question.entities],
+            "operations": [
+                op.to_dict() if hasattr(op, "to_dict") else str(op)
+                for op in self.question.operations
+            ],
             "sub_questions": [
                 {"text": s.text, "completion": s.completion,
                  "satisfied": s.satisfied, "attempted": s.attempted, "note": s.note}
@@ -309,6 +330,8 @@ class Investigation:
             "evidence_chain": self.evidence_chain,
             "conflicts": self.conflicts,
             "calculation": self.computation,
+            "visual_observations": self.visual_observations,
+            "visual_gaps": self.visual_gaps,
             "investigation": {
                 "iterations": len(self.iterations),
                 "queries": self.queries_issued,
