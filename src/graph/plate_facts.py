@@ -58,9 +58,29 @@ FIGURE_ATTRIBUTES = frozenset({
 })
 
 
+# Attributes whose answer is the *picture itself*: what a banner shows, what a
+# portrait's subject is holding. No table states these and no OCR recovers them,
+# because there is nothing written to recover — they are the one class of
+# question that genuinely requires looking at the image.
+VISUAL_ATTRIBUTES = frozenset({
+    "emblem", "banner", "heraldry", "appearance", "visual_identity", "arms_and_regalia",
+    "clothing", "armament", "symbol",
+})
+
+
 def is_figure_attribute(attribute: str | None) -> bool:
     """True when a figure plate is a plausible source for this attribute."""
     return bool(attribute) and attribute in FIGURE_ATTRIBUTES
+
+
+def is_visual_attribute(attribute: str | None) -> bool:
+    """True when only an image can answer this — a painted emblem, an object held."""
+    return bool(attribute) and attribute in VISUAL_ATTRIBUTES
+
+
+def routes_to_figure(attribute: str | None) -> bool:
+    """True when a figure is worth consulting for this attribute at all."""
+    return is_figure_attribute(attribute) or is_visual_attribute(attribute)
 
 
 def is_chart_plate(text: str) -> bool:

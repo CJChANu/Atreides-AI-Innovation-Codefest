@@ -106,6 +106,11 @@ class Settings:
     # one we verified end to end, and it is overridable from .env precisely
     # because the next rotation will break it too.
     llm_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
+    # Vision is a separate model on purpose: the text model above reports
+    # `input_modalities: ["text"]` and cannot see an image at all. Empty means
+    # visual interpretation is disabled and figures are reported as unreadable
+    # rather than guessed at.
+    vision_model: str = ""
     llm_api_key: str | None = None
     # Embeddings usually live behind a *different* provider from the chat model
     # (Voyage keys do not work against OpenRouter), so they get their own base URL.
@@ -146,6 +151,7 @@ def load_settings() -> Settings:
         ),
         llm_base_url=os.environ.get("AEA_LLM_BASE_URL", "https://openrouter.ai/api/v1"),
         llm_model=os.environ.get("AEA_LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
+        vision_model=os.environ.get("AEA_VISION_MODEL", ""),
         llm_api_key=os.environ.get("AEA_LLM_API_KEY"),
         embedding_base_url=os.environ.get("AEA_EMBEDDING_BASE_URL",
                                           "https://api.voyageai.com/v1"),

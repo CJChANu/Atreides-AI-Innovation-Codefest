@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.ai_gateway.gateway import AIGateway
+from src.ai_gateway.vision import VisionReader
 from src.common.config import Settings
 from src.indexes.vector import VectorIndex, load_adapter
 from src.orchestration.investigator import Investigator
@@ -56,8 +57,9 @@ def build_system(store: ArchiveStore, settings: Settings, *, budget=None):
     retriever = HybridRetriever(store, keyword, vector if vector.ready else None,
                                 embedder, settings.fusion)
 
+    vision = VisionReader(settings)
     investigator = Investigator(store, budget or settings.budget,
-                                gateway=gateway, retriever=retriever)
+                                gateway=gateway, retriever=retriever, vision=vision)
 
     counts = store.stats()
     modes = SystemModes(
