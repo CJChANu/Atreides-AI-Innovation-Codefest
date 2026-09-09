@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 
 class AskOptions(BaseModel):
-    max_iterations: int = Field(default=6, ge=1, le=100)
+    max_iterations: int = Field(default=6, ge=1, le=1000)
     show_trace: bool = True
     allow_llm: bool = True
 
