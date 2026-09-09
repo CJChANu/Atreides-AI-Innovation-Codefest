@@ -31,6 +31,13 @@ class EvidenceRef(BaseModel):
     chunk_id: str
     source_class: str
     reliability: float = 0.0
+    # The line the value was read from, so the UI can show the source text next
+    # to the claim rather than only a reference to it.
+    excerpt: str = ""
+    # Set for evidence that came from a figure, so the UI can show the plate the
+    # answer rests on. Served through /api/figures/{id}/asset, which validates
+    # the path against the archive rather than trusting the request.
+    figure_id: str = ""
 
 
 class ClaimOut(BaseModel):
@@ -38,12 +45,21 @@ class ClaimOut(BaseModel):
     claim_type: str
     confidence: float
     confidence_label: str
+    confidence_reasons: list[str] = []
     evidence: list[EvidenceRef] = []
 
 
 class AskResponse(BaseModel):
     question: str
     answer: str
+    # The authoritative completion verdict. `partial` is kept as a convenience
+    # mirror of `status.is_partial` so existing clients keep working, but both
+    # come from the same evaluation — they cannot disagree.
+    investigation_id: str
+    status: str
+    status_headline: str = ""
+    status_reasons: list[str] = []
+    unmet_requirements: list[str] = []
     partial: bool
     ai_mode: str
     claims: list[ClaimOut] = []
@@ -52,6 +68,7 @@ class AskResponse(BaseModel):
     graph_path: list[str] = []
     trace: list[dict[str, Any]] = []
     sub_questions: list[dict[str, Any]] = []
+    calculation: dict[str, Any] = {}
     stop_reason: str
     fallback_events: list[str] = []
     stats: dict[str, Any] = {}

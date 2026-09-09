@@ -13,6 +13,7 @@ reader who does not should be able to check every step.
 from __future__ import annotations
 
 from src.orchestration.state import ClaimType, Intent, Investigation, StopReason
+from src.orchestration.status import evaluate
 
 # Stops that mean "we ran out of room", not "we are done". Answers reached this
 # way are labelled partial, because presenting a budget stop as certainty is the
@@ -22,18 +23,16 @@ PARTIAL_STOPS = {StopReason.ITERATION_BUDGET, StopReason.QUERY_BUDGET,
                  StopReason.INSUFFICIENT_EVIDENCE, StopReason.NO_ENTITY}
 
 
-def is_partial(state: Investigation) -> bool:
+def is_partial(state: Investigation, fallback_events: list[str] | None = None) -> bool:
     """Whether the answer must carry the PARTIAL warning.
 
-    The stop reason alone is not enough. An open question can legitimately satisfy
-    every sub-question ("relevant passages retrieved") and still produce no
-    grounded claim — which reached the user as an uncaveated answer reading "No
-    recorded value answers this directly". An answer with nothing supporting it is
-    partial no matter how cleanly the loop finished.
+    Delegates to `status.evaluate`, which is the single place completion is
+    decided. It used to be decided here *and* by the stop reason *and* by the
+    claim builder, and the three could disagree — producing output that said
+    PARTIAL, "all required sub-questions are supported" and "unsupported claim"
+    at once. A reader cannot act on that.
     """
-    if state.stop_reason in PARTIAL_STOPS:
-        return True
-    return all(c.claim_type is ClaimType.UNSUPPORTED for c in state.claims)
+    return evaluate(state, fallback_events).is_partial
 
 
 def headline(state: Investigation) -> str:
@@ -57,20 +56,22 @@ def _claim_for(state: Investigation, key: str):
     return next((c for c in state.claims if c.step_key == key and c.evidence), None)
 
 
-def render(state: Investigation, title_of, *, show_trace: bool = True) -> str:
+def render(state: Investigation, title_of, *, show_trace: bool = True,
+           fallback_events: list[str] | None = None) -> str:
     """Human-readable answer: result, evidence, conflicts, then the audit trail."""
     question = state.question
     lines: list[str] = []
 
-    partial = is_partial(state)
+    report = evaluate(state, fallback_events)
     lines.append("═" * 74)
     lines.append(f"QUESTION  {question.text}")
     lines.append("═" * 74)
     lines.append("")
     lines.append(f"ANSWER    {headline(state)}")
-    if partial:
-        lines.append("          ⚠ PARTIAL — the investigation stopped before every "
-                     "sub-question\n            was supported. Treat with caution.")
+    if report.is_partial:
+        lines.append(f"          ⚠ {report.status.value.upper()} — {report.headline}")
+        for unmet in report.unmet[:3]:
+            lines.append(f"            still open: {unmet}")
     lines.append("")
 
     # -- claims with citations ---------------------------------------------
@@ -133,7 +134,8 @@ def render(state: Investigation, title_of, *, show_trace: bool = True) -> str:
 
     # -- why it stopped -----------------------------------------------------
     lines.append("STOPPED BECAUSE")
-    lines.append(f"  {state.stop_reason.value}")
+    lines.append(f"  status: {report.status.value} — {report.headline}")
+    lines.append(f"  loop  : {state.stop_reason.value}")
     lines.append(f"  {len(state.iterations)} iteration(s) · {state.queries_issued} query/queries "
                  f"· {state.graph_expansions} graph expansion(s) "
                  f"· {state.elapsed_seconds * 1000:.0f} ms")

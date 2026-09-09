@@ -259,6 +259,20 @@
     button.go{width:100%}
     .answer{font-size:19px}
   }
+
+  .excerpt{color:var(--muted);font-size:12px;margin:3px 0 0 2px;font-style:italic;
+    border-left:2px solid var(--line);padding-left:8px}
+  .asset img{max-width:220px;border:1px solid var(--line);border-radius:4px;margin-top:6px}
+  .why-partial{color:var(--muted);font-size:12px;margin-top:4px}
+  .why-conf{color:var(--dim);font-size:11.5px;margin:2px 0 4px 2px}
+  .ok-badge{color:#5b8c5a;font-size:12.5px;margin-top:8px}
+  .calc code{font-size:13px}
+  .calc-result{font-size:16px;margin:6px 0 10px}
+  .operand{margin:6px 0;font-size:13px}
+  .visual{margin:6px 0;font-size:13px;padding:8px;border:1px solid var(--line);border-radius:4px}
+  .visual.gap{color:var(--muted);font-style:italic}
+  .tag.partial_visual,.tag.visual_ambiguous{background:#7a5c1e;color:#fff}
+  .tag.vision_unavailable{background:#5a5a5a;color:#fff}
 </style>
 </head>
 <body>
@@ -399,9 +413,19 @@ async function loadHealth(){
 function renderCite(e){
   const where = e.page ? `p.${e.page}` : "infobox";
   const link = `/api/documents/${encodeURIComponent(e.document_id)}/chunks${e.page?`?page=${e.page}`:""}`;
+  // The quoted line is the point of a citation: it lets a reader check the
+  // extraction without opening the document.
+  const quote = e.excerpt
+    ? `<div class="excerpt">“${esc(e.excerpt)}”</div>` : "";
+  // A visual claim shows the plate it rests on, not just its filename.
+  const asset = e.figure_id
+    ? `<div class="asset"><a href="/api/figures/${encodeURIComponent(e.figure_id)}/asset"
+         target="_blank" rel="noopener"><img loading="lazy" alt="${esc(e.document)}"
+         src="/api/figures/${encodeURIComponent(e.figure_id)}/asset"></a></div>` : "";
   return `<div class="cite"><span style="color:var(--dim)">└</span>
     <span><a href="${link}" target="_blank" rel="noopener">${esc(e.document)}</a>
-    <span class="src">[${esc(e.source_class)} · reliability ${e.reliability.toFixed(2)} · ${where}]</span></span></div>`;
+    <span class="src">[${esc(e.source_class)} · reliability ${e.reliability.toFixed(2)} · ${where}]</span>
+    ${quote}${asset}</span></div>`;
 }
 
 function renderPath(path){
@@ -416,9 +440,48 @@ function render(d){
   let h = "";
 
   h += `<section><h2>Answer</h2><div class="answer">${esc(d.answer)}</div>`;
-  if(d.partial) h += `<div class="warn">⚠ PARTIAL — the investigation stopped before every
-    sub-question was supported. Treat with caution.</div>`;
+  // Completion is decided by the backend and read here. The UI must never form
+  // its own opinion about whether a result is complete — that is how the same
+  // response ended up labelled PARTIAL in one place and finished in another.
+  if(d.partial){
+    h += `<div class="warn">⚠ ${esc((d.status||"partial").toUpperCase())} — ${esc(d.status_headline||"")}`;
+    if(d.status_reasons?.length)
+      h += `<div class="why-partial">${d.status_reasons.map(esc).join(" · ")}</div>`;
+    if(d.unmet_requirements?.length)
+      h += `<div class="why-partial">still open: ${d.unmet_requirements.map(esc).join("; ")}</div>`;
+    h += `</div>`;
+  } else {
+    h += `<div class="ok-badge">✓ ${esc(d.status_headline||"complete")}</div>`;
+  }
   h += `</section>`;
+
+  // Arithmetic and comparisons show their working, with each operand's source.
+  if(d.calculation && Object.keys(d.calculation).length && d.calculation.formula){
+    h += `<section><h2>Calculation</h2>
+      <div class="calc"><code>${esc(d.calculation.formula)}</code>
+      <div class="calc-result">= ${esc(d.calculation.result_text||"")}</div>`;
+    for(const o of (d.calculation.operands||[])){
+      h += `<div class="operand"><b>${esc(o.subject)}</b>
+        <span style="color:var(--dim)">· ${esc((o.attribute||"").replace(/_/g," "))}</span>
+        = ${esc(String(o.value_text ?? o.value ?? ""))}
+        ${(o.citations||[]).map(c=>`<div class="src">${esc(c)}</div>`).join("")}</div>`;
+    }
+    h += `</div></section>`;
+  }
+
+  // What a vision model reported, kept visibly separate from recorded facts.
+  if(d.visual_observations?.length || d.visual_gaps?.length){
+    h += `<section><h2>Visual evidence</h2>`;
+    for(const v of (d.visual_observations||[])){
+      h += `<div class="visual ${esc(v.status)}">
+        <span class="tag ${esc(v.status)}">${esc(v.status.replace(/_/g," "))}</span>
+        ${esc(v.description||v.note||"")}
+        <div class="src">${esc(v.figure_id)}${v.model?` · ${esc(v.model)}`:""}</div></div>`;
+    }
+    for(const g of (d.visual_gaps||[]))
+      h += `<div class="visual gap">${esc(g)}</div>`;
+    h += `</section>`;
+  }
 
   if(d.claims?.length){
     h += `<section><h2>Supporting claims</h2>`;
@@ -427,6 +490,8 @@ function render(d){
         <span class="tag ${c.claim_type}">${c.claim_type}</span>${esc(c.text)}
         <div class="meter"><div class="bar"><div class="fill" data-w="${Math.round(c.confidence*100)}"></div></div>
           <span>${c.confidence.toFixed(2)} · ${esc(c.confidence_label)}</span></div>
+        ${c.confidence_reasons?.length
+            ? `<div class="why-conf">${c.confidence_reasons.map(esc).join(" · ")}</div>` : ""}
         ${c.evidence.map(renderCite).join("")}</div>`;
     }
     h += `</section>`;
@@ -488,7 +553,10 @@ function render(d){
     h += `</section>`;
   }
 
-  h += `<section><h2>Stopped because</h2><div class="stop">${esc(d.stop_reason)}</div>
+  h += `<section><h2>Stopped because</h2>
+    <div class="stop">${esc(d.status||"")} — ${esc(d.status_headline||"")}</div>
+    <div class="stopstat">loop: ${esc(d.stop_reason)}</div>
+    <div class="stopstat">investigation: ${esc(d.investigation_id||"")}</div>
     <div class="stopstat">mode: ${esc(d.ai_mode)} · ${d.stats.iterations} iteration(s) ·
       ${d.stats.queries} query/queries · ${d.stats.graph_expansions} graph expansion(s) ·
       ${d.stats.elapsed_ms} ms</div>`;

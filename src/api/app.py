@@ -116,21 +116,35 @@ def ask(request: AskRequest) -> AskResponse:
         state = investigator.investigate(request.question)
         response = to_response(state, store, FactQuery(store).title_of,
                                gateway.fallback_events)
-        # Open comparison / explanation questions often retrieve good evidence but
-        # have no single structured value. When LLM is allowed, synthesize a
-        # concise answer from those retrieved passages, with inline evidence ids.
+        # Open questions often retrieve good passages without yielding a single
+        # structured value. Composing prose from those passages is genuinely
+        # useful — but it is a *presentation* of retrieved text, not a finding,
+        # and two things must stay true when it happens.
+        #
+        # It must not claim the investigation completed. The loop still failed to
+        # establish its requirements; saying otherwise put a confident answer
+        # above an "unsupported" claim in the same response.
+        #
+        # And it must not replace the evidence chain. Those entries are the
+        # document-and-page record the answer rests on; overwriting them with
+        # "LLM synthesis used E1" discards the provenance this system exists to
+        # provide. The synthesis is appended to it, never substituted for it.
         if (request.options.allow_llm and response.partial
                 and response.answer.startswith("No recorded value answers this directly")):
-            synthesized = gateway.synthesize_answer(
-                request.question, _synthesis_passages(state, store)
-            )
+            passages = _synthesis_passages(state, store)
+            synthesized = gateway.synthesize_answer(request.question, passages)
             if synthesized:
+                labels = {eid: label for eid, label, _ in passages}
+                used = synthesized.get("used_evidence_ids", [])
                 response.answer = synthesized["answer"]
-                response.partial = False
-                response.evidence_chain = [
-                    f"LLM synthesis used {eid}" for eid in synthesized.get("used_evidence_ids", [])
+                response.evidence_chain = response.evidence_chain + [
+                    f"Synthesised from retrieved passage {eid}: {labels.get(eid, eid)}"
+                    for eid in used
                 ]
                 response.stats["synthesis"] = "llm_grounded_passages"
+                response.status_reasons = response.status_reasons + [
+                    "answer composed from retrieved passages, not from a recorded value"
+                ]
         if not request.options.show_trace:
             response.trace = []
         return response
